@@ -1,7 +1,7 @@
 #include "options.h"
 #include "fasta.h"
 #include "vcf.h"
-#include "Benchmark.h"
+#include "include/Benchmark.h"
 
 void startMsg() {
 	cout << "VCF2Fasta v"<< vcf2fnaVERSION <<" - A tool to convert VCF files to FASTA format\n";
@@ -17,7 +17,7 @@ if (argc < 2) { cerr << "Not enough arguments. Use \"vcf2fna -h\" for getting st
 ini_AA();
 
 //clock_t tStart = clock();
-Benchmark* bench = new Benchmark("Time vcf2fasta: ");
+Benchmark* bench = new Benchmark("Time vcf2fasta ");
 bench->start();
 
 //1 read_vcf_file in the command line arguments

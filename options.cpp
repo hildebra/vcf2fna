@@ -11,7 +11,8 @@ istream* openGZUZ(const string& inF) {
 	istream* in(nullptr);
 	if (isGZfile(inF)) {
 #ifdef _gzipread
-		in = new igzstream(inF.c_str(), ios::in); cout << "Straming gzip input on the fly\n";
+		in = new igzstream(inF.c_str(), ios::in); 
+		//cout << "Straming gzip input on the fly\n";
 #else
 		cout << "gzip in not supported in your vcf2fna build\n"; exit(50);
 #endif
@@ -31,7 +32,7 @@ ostream* writeGZUZ(const string& outF) {
 	if (isGZfile(outF)) {
 #ifdef _gzipread
 		out = new ogzstream(outF.c_str(), ios::out);
-		cout << "Writing gzip'd matrix " << outF << endl;
+		//cout << "Writing gzip'd matrix " << outF << endl;
 #else
 		cout << "gzip out not supported in your vcf2fna build\n"; exit(51);
 #endif
@@ -171,12 +172,22 @@ addHDTags(true), skipEmptyContigs(true)
 void options::print_details() {
 
 	// print run mode:
-	cout << "output file:    " << outfna << std::endl;
 	cout << "ref assembly:   " << refFasta << std::endl;
 	cout << "input vcf:      " << inVCF << std::endl;
+	cout << "depth file:     " << depthF << std::endl;
+	cout << "gff file:       " << gffFile << std::endl;
+	cout << "output types:   " << outputTypes << "::";
+	cout << outfna << " " << outGeneNT << " " << outGeneAA << std::endl;
+	cout << "tmp dir:        " << tmp << std::endl;
+	cout << "threads:        " << threads << std::endl;
+	cout << "minFS:         " << minFS << std::endl;
+	cout << "minMQ0F:       " << minMQ0F << std::endl;
+	cout << "minBQBZ:       " << minBQBZ << std::endl;
+	cout << "minSP:         " << minSP << std::endl;
+	cout << "skipEmptyContigs: " << skipEmptyContigs << std::endl;	
 	cout << "minCallDepth:   " << minDepthPar << std::endl;
 	cout << "minCallQual:    " << minCallQual << std::endl;
-	cout << "threads:     " << threads << std::endl;
+	//cout << "threads:        " << threads << std::endl;
 	//cout << "mode:           " << mode  << std::endl;
 
 }

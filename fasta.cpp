@@ -130,9 +130,9 @@ string gene::geneAA(const string& seq) {
 
 void fasta::SNP(int pos, string r, string a, float freq)
 { 
-	if (seq[pos] != r[0]) {
+	if (seq[pos] != r[0] && toupper(seq[pos]) != 'N') {
 		char tmp = seq[pos];
-		throw std::runtime_error("Error: SNP position does not match reference sequence at position " + std::to_string(pos) + ": " + seq[pos] + " != " + r);
+		throw std::runtime_error("Error: SNP position does not match reference sequence "+ header +" at position " + std::to_string(pos) + ": " + seq[pos] + " != " + r);
 	}
 	seq[pos] = a[0]; 
 	if (freq < 0.f || a == "N") { UnctCnt++; return; }
@@ -224,7 +224,7 @@ string gene::createHDtag(const string& seq, list<int>& SNPsPos, list<float>& SNP
 	}
 	
 	hd += "] F = [" + freqV + "]";
-	hd+= " oCSP = " + to_string_with_precision(CSP,3) +" CSP = "+to_string_with_precision(oCSP, 3); 
+	hd+= " oCSP=" + to_string_with_precision(CSP,3) +" CSP="+to_string_with_precision(oCSP, 3); 
 	return hd;
 }
 
