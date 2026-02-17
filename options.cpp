@@ -1,5 +1,54 @@
 #include "options.h"
 
+
+
+
+
+
+
+vector<string> splitByComma(const string& str) {
+	vector<string> result;
+	stringstream ss(str);
+	string item;
+	while (getline(ss, item, ',')) {
+		result.push_back(item);
+	}
+	return result;
+}
+vector<int> splitByCommaI(const string& str) {
+	vector<int> result;
+	stringstream ss(str);
+	string item;
+	while (getline(ss, item, ',')) {
+		result.push_back(atoi(item.c_str()));
+	}
+	return result;
+}
+
+string combCommas(const vector<string>& vec) {
+	string result;
+	for (size_t i = 0; i < vec.size(); ++i) {
+		result += vec[i];
+		if (i != vec.size() - 1) {
+			result += ",";
+		}
+	}
+	return result;
+}
+string combCommas(const vector<int>& vec) {
+	string result;
+	for (size_t i = 0; i < vec.size(); ++i) {
+		result += to_string(vec[i]);
+		if (i != vec.size() - 1) {
+			result += ",";
+		}
+	}
+	return result;
+}
+
+
+
+
 bool isGZfile(std::string fi) {
 	if (fi.substr(fi.length() - 3) == ".gz") {
 		return true;
@@ -62,6 +111,10 @@ void helpMsg() {
 	cout << "  -oGeneNT [file] : output file for gene nucleotide sequences\n";
 	cout << "  -oGeneAA [file] : output file for gene amino acid sequences\n";
 	cout << "  -outType [CNA] : (C): print contigs (N): print genes on ctgs (A): print translated AA of genes\n";
+	cout << "  -keepEmptyCtgs : keep empty contigs in output\n";
+	cout << "  -keepEmptyGenes : keep empty genes in output\n";
+	cout << "  -seqPlatform [platform] : sequencing platform (ill, PB, ONT)\n";
+	cout << "  -skipINDELs : do not report INDELs in the output sequences\n";
 }
 
 void versionMsg() {
@@ -80,11 +133,13 @@ void options::announce() {
 
 options::options(int argc, char** argv) :refFasta(""),
 outfna(""), outGeneNT(""), outGeneAA(""),
-tmp(""),inVCF(""), depthF(""), gffFile(""), outputTypes("NCA"),
+tmp(""),inVCF(0), depthF(0), gffFile(""), outputTypes(""),
+seqPlatform(0),
 threads(1),
-minDepthPar(2), minCallQual(20),
+minDepthPar(0), minCallQual(20),
 minFS(0.01), minMQ0F(0.6), minBQBZ(0.05), minSP(20),
-addHDTags(true), skipEmptyContigs(true)
+addHDTags(true), skipEmptyContigs(true), skipEmptyGenes(true),
+debug1(false), reportINDELs(true)
 {
 
 
@@ -102,41 +157,63 @@ addHDTags(true), skipEmptyContigs(true)
 		versionMsg();
 		exit(0);
 	}
-
 	for (int i = 1; i < argc; i++)
 	{
 		if (!strcmp(argv[i], "-ref")) {
 			refFasta = argv[++i];
-		}else if (!strcmp(argv[i], "-oCtg")) {
+		} else if (!strcmp(argv[i], "-oCtg")) {
 			outfna = argv[++i];
-		}else if (!strcmp(argv[i], "-oGeneNT")) {
+		} else if (!strcmp(argv[i], "-oGeneNT")) {
 			outGeneNT = argv[++i];
-		}else if (!strcmp(argv[i], "-oGeneAA")) {
+		} else if (!strcmp(argv[i], "-oGeneAA")) {
 			outGeneAA = argv[++i];
-		}else if (!strcmp(argv[i], "-tmp")) {
+		} else if (!strcmp(argv[i], "-tmp")) {
 			tmp = argv[++i];
-		}else if (!strcmp(argv[i], "-outType")) {
+		} else if (!strcmp(argv[i], "-outType")) {
 			outputTypes = argv[++i];
-		}else if (!strcmp(argv[i], "-gff")) {
+		} else if (!strcmp(argv[i], "-gff")) {
 			gffFile = argv[++i];
-		}else if (!strcmp(argv[i], "-inVCF")) {
-			inVCF = argv[++i];
-		}else if (!strcmp(argv[i], "-depthF")) {
-			depthF = argv[++i];
-		}		else if (!strcmp(argv[i], "-t")) {
+		} else if (!strcmp(argv[i], "-inVCF")) {
+			inVCF = splitByComma(argv[++i]);
+		}else if (!strcmp(argv[i], "-seqPlatform")) {
+			seqPlatform = splitByComma(argv[++i]);
+		} else if (!strcmp(argv[i], "-depthF")) {
+			depthF = splitByComma(argv[++i]);
+		} else if (!strcmp(argv[i], "-t")) {
 			threads = atoi(argv[++i]);
-		}
-		else if (!strcmp(argv[i], "-minCallDepth")) {
-			minDepthPar = atoi(argv[++i]);
-		}
-		else if (!strcmp(argv[i], "-minCallQual")) {  // no swap
+		} else if (!strcmp(argv[i], "-minCallDepth")) {
+			vector<string> minDepthParT = splitByComma(argv[++i]);
+			minDepthPar.resize(minDepthParT.size());
+			for (size_t i = 0; i < minDepthParT.size(); i++) {
+				minDepthPar[i] = atoi(minDepthParT[i].c_str());
+			}
+		} else if (!strcmp(argv[i], "-minCallQual")) {  // no swap
 			minCallQual = atoi(argv[++i]);
+		}else if (!strcmp(argv[i], "-keepEmptyCtgs")) {
+			skipEmptyContigs = false;
+		}
+		else if (!strcmp(argv[i], "-keepEmptyGenes")) {
+			skipEmptyGenes = false;
+		}
+		else if (!strcmp(argv[i], "-skipINDELs")) {
+			reportINDELs = false;
+		}
+		else if (!strcmp(argv[i], "-debug1")) {
+			debug1 = true;
+			cerr << "\n\nDEBUG1 active\n\n";
 		}
 		else {
 			cerr << "Unknown option: " << argv[i] << endl;
 			hasErr = true;
 		}
 
+	}
+
+	if (seqPlatform.size() == 0 && inVCF.size() == 1) {
+		seqPlatform.push_back("ill");//assume illumina by default
+	}
+	if (minDepthPar.size() == 0 && inVCF.size() == 1) {
+		minDepthPar.push_back(2);//assume 2
 	}
 
 
@@ -148,15 +225,42 @@ addHDTags(true), skipEmptyContigs(true)
 			cerr << "-ref must be specified\n";
 			hasErr = true;
 		}
+		/*
 		if (outfna == "") {//just set some defaults
 			cerr << "-outfna must be specified\n";
 			hasErr = true;
 		}
-		if (inVCF == "") {//just set some defaults
+		*/
+		if (inVCF.size() == 0) {//just set some defaults
 			cerr << "-inVCF must be specified\n";
 			hasErr = true;
 		}
+		if (gffFile.empty()) {
+			cerr << "-gff must be specified\n";
+			hasErr = true;
+		}
+		if (depthF.size() > 2) {
+			cerr << "Max 2 depth/vcf files are allowed!\n";
+			hasErr = true;
+		}
+		if (depthF.size() != inVCF.size()) {
+			cerr << "Error: -depthF and -inVCF must have the same num of \",\"\n";
+			hasErr = true;
+		}
+		if (depthF.size() != seqPlatform.size()) {
+			cerr << "Error: -depthF and -seqPlatform must have the same num of \",\"\n";
+			hasErr = true;
+		}
+		if (depthF.size() != minDepthPar.size()) {
+			cerr << "Error: -depthF and -minCallDepth must have the same num of \",\"\n";
+			hasErr = true;
+		}
 
+		if (outputTypes == "") {
+			if (!outfna.empty()) { outputTypes += "C"; }
+			if (!outGeneAA.empty()) { outputTypes += "A"; }
+			if (!outGeneNT.empty()) { outputTypes += "N"; }
+		}
 
 		if (hasErr) {
 			cerr << "Error in option parsing.\nUse \"vcf2fasta -h\" to get full help.\n";
@@ -172,21 +276,26 @@ addHDTags(true), skipEmptyContigs(true)
 void options::print_details() {
 
 	// print run mode:
-	cout << "ref assembly:   " << refFasta << std::endl;
-	cout << "input vcf:      " << inVCF << std::endl;
-	cout << "depth file:     " << depthF << std::endl;
-	cout << "gff file:       " << gffFile << std::endl;
-	cout << "output types:   " << outputTypes << "::";
+	cout << "ref assembly: " << refFasta << std::endl;
+	cout << "input vcf:    " << combCommas(inVCF) << std::endl;
+	cout << "depth file:   " << combCommas(depthF) << std::endl;
+	cout << "gff file:     " << gffFile << std::endl;
+	cout << "output types: \"" << outputTypes << "\" ::";
 	cout << outfna << " " << outGeneNT << " " << outGeneAA << std::endl;
-	cout << "tmp dir:        " << tmp << std::endl;
-	cout << "threads:        " << threads << std::endl;
-	cout << "minFS:         " << minFS << std::endl;
-	cout << "minMQ0F:       " << minMQ0F << std::endl;
-	cout << "minBQBZ:       " << minBQBZ << std::endl;
-	cout << "minSP:         " << minSP << std::endl;
+	if (outfna.empty() && outGeneNT.empty() && outGeneAA.empty()){
+		cout << "  (no output files specified - theoretical statistics reported)" << std::endl;
+	}
+	cout << "tmp dir:          " << tmp << std::endl;
+	cout << "threads:          " << threads << std::endl;
+	cout << "minFS:            " << minFS << std::endl;
+	cout << "minMQ0F:          " << minMQ0F << std::endl;
+	cout << "minBQBZ:          " << minBQBZ << std::endl;
+	cout << "minSP:            " << minSP << std::endl;
 	cout << "skipEmptyContigs: " << skipEmptyContigs << std::endl;	
-	cout << "minCallDepth:   " << minDepthPar << std::endl;
-	cout << "minCallQual:    " << minCallQual << std::endl;
+	cout << "minCallDepth:     " << combCommas(minDepthPar) << std::endl;
+	cout << "minCallQual:      " << minCallQual << std::endl;
+	cout << "seqPlatform:      " << combCommas(seqPlatform) << std::endl;
+	cout << "reportINDELs:     " << reportINDELs << std::endl;
 	//cout << "threads:        " << threads << std::endl;
 	//cout << "mode:           " << mode  << std::endl;
 

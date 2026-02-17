@@ -1,23 +1,34 @@
 #pragma once
 
 #include "options.h"
-#include <list>
-#include <algorithm>
 
 
 
 using namespace std;
 
 
+class VCFmem; // forward declaration
+
 void ini_AA();
 
 
+struct OutputStats {
+	int totalContigs, totalCtgNTs, totalGenes, totalGeneNTs, totalGeneAAs;
+	OutputStats() :totalContigs(0), totalCtgNTs(0), totalGenes(0), totalGeneNTs(0), totalGeneAAs(0) {}
+	void printStats() {
+		cout << "In total, wrote " << totalContigs << " contigs with "<< totalCtgNTs<< " valid NTs, ";
+		cout << totalGenes << " genes, ";
+		cout << totalGeneNTs << " gene NTs, ";
+		cout << totalGeneAAs << " gene AAs." << endl;
+	}
+};
 
 class gene
 {
 public:
 	gene() : geneID(""), geneStart(0), geneEnd(0), geneLength(0), geneStrand(true), numOnContig(-1){}
-	gene(string id, int sta, int end) : geneID(id), geneStart(sta), geneEnd(end), geneLength(end-sta), geneStrand(true), numOnContig(-1) {}
+	gene(string id, int sta, int end);// : geneID(id), geneStart(sta), geneEnd(end), geneLength(end - sta), geneStrand(true), numOnContig(-1) {}
+	gene(gene* GG);
 	~gene() {}
 	void setStrand(string s) { if (s == "-") geneStrand = false; else geneStrand = true; }
 	void setType(string t) { type = t; }
@@ -45,43 +56,98 @@ private:
 
 	//functions
 	void reverseComplement( string& seq);
+
+	friend class geneCollection;
 };
+
+
+class fasta;//fwd declaration
+
+class geneCollection
+{
+public:
+	geneCollection():genes(0, nullptr), genesMut(0, nullptr), mutsPrepared(false) {}
+	~geneCollection();// { for (size_t i = 0; i < genes.size(); i++) { if (genes[i] != nullptr) { delete genes[i]; } } }
+	void addGene(gene* g) { genes.push_back(g); }
+	void writeAllGenes(options* opts, string& NTs, string& AAs, bool doNT, 
+		bool doAA, fasta* fa, OutputStats* Ostats);
+	size_t size() { return genes.size(); }
+	void push_back(gene* g) { genes.push_back(g); }
+	void correctCoords(int pos, int altL, int refL);
+	void prepMuts();
+private:
+	vector<gene*> genes;
+	vector<gene*> genesMut;
+	bool mutsPrepared;
+
+};
+
 
 
 class fasta
 {
 public:
-	fasta(string s, string h) :seq(s),header(h),length(s.length()),
-		SNPsCnt(0), UnctCnt(0), SNPsPos(0), SNPfreqs(0),conflictCnt(0){}
-	~fasta() { for (size_t i = 0; i < genes.size(); i++) { if (genes[i] != nullptr) { delete genes[i]; } } }
+	fasta(string s, string h) :seq(s), mutSeq(""),mutSeqDone(false),
+		header(h), seqUse(s.length(), false), length(s.length()),
+		SNPsCnt(0), UnctCnt(0),  SNPsPos(0), SNPfreqs(0),conflictCnt(0),
+		INDELcnt(0),INDELpos(0),INDELfreq(0), geneCol(nullptr)
+	{
+		geneCol = new geneCollection();
+	}
+	~fasta() { delete geneCol; }
+//functions
 	string getSeq() const { return seq; }
 	string getHeader() const { return header; }
 	int getLength() const { return (int)seq.length(); }
 	void setSeq(string s) { seq = s; }
 	void resetCnts() { length = seq.length(); }
-	void SNP(int pos, string r, string a, float freq);
-	string write(bool hdTags,bool skipEmpty);
+	void ntVariant(VCFmem* vx);
+	string write(options* opts, OutputStats* Ostats);
 	void addGene(string id, int sta, int end,string strand,string type,int transTab,string partial);
-	void writeAllGenes(options* opts, string& NTs, string& AAs, bool doNT, bool doAA);
+	//void writeAllGenes(options* opts, string& NTs, string& AAs, bool doNT, bool doAA);
+	int maskSeq(int start, int end, bool repl=false);
+	int unmaskSeq(int start, int end);
+	long getSNPcount() { return SNPsCnt; }
+	long getNonNcount() { return length - getNumNs(); }
+	void writeAllGenes(options* opts, string& NTs, string& AAs, bool doNT, bool doAA, OutputStats* Ostats) {
+		geneCol->writeAllGenes(opts, NTs, AAs, doNT, doAA, this, Ostats);
+	}
+	void prepMuts() { geneCol->prepMuts();  }
+
+
 private:
 	//functions
-	string getMutatedSeq() { return seq; }  //TODO
+	void SNP(int pos, string r, string a, float freq);
+	void INDEL(int pos, string r, string a, float freq);
 	string getMutatedHeader(bool);
-	int getNumNs() { return count(seq.begin(), seq.end(), 'N'); }
+	//int getNumNs() { return count(seq.begin(), seq.end(), 'N'); }
+	int getNumNs() { return count(seqUse.begin(), seqUse.end(), false); }
+	string getMutatedSeq(options* opts);
 
 
 	//variables
-	string seq;
+	string seq, mutSeq;
+	bool mutSeqDone;
 	string header;
+	vector<bool> seqUse; //use this position? true = use, false = mask with N
 	int length;
 	//stats
 	int SNPsCnt, UnctCnt;
 	list<int> SNPsPos;
 	list<float> SNPfreqs;
 	int conflictCnt;
+	int INDELcnt;
+	vector<int> INDELpos;
+	list<float> INDELfreq;
+	vector<string> INDELref, INDELalt;
 
-	vector<gene*> genes;	// list of genes in the fasta file
+	// list of genes in the fasta file, from gff
+	geneCollection* geneCol;
+
+	friend class geneCollection; // Allows geneCollection to see vars
+
 };
+
 
 
 class refAssembly
@@ -100,8 +166,9 @@ public:
 
 private:
 //functions
-	void writeContigs();
-	void writeGenes();
+	void writeContigs(OutputStats* Ostats);
+	void writeGenes(OutputStats* Ostats);
+	void maskAllSeqs(const string&, int minDepth);
 
 
 

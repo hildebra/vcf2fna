@@ -1,5 +1,5 @@
 #include "fasta.h"
-
+#include "vcf.h"
 
 
 //****************************************************************
@@ -65,6 +65,21 @@ std::string to_string_with_precision(const T a_value, const int n = 6)
 
 
 
+//class gene
+
+gene::gene(string id, int sta, int end) : 
+	geneID(id), geneStart(sta), geneEnd(end), geneLength(end - sta), geneStrand(true), numOnContig(-1) 
+{
+	assert(geneEnd >= geneStart);
+}
+
+gene::gene(gene* GG) : geneID(GG->geneID), geneStart(GG->geneStart), geneEnd(GG->geneEnd), geneLength(GG->geneLength),
+geneStrand(GG->geneStrand), type(GG->type), translationTable(GG->translationTable),
+numOnContig(GG->numOnContig), partial(GG->partial) 
+{
+}
+
+
 void gene::reverseComplement (string& seq) {
 	transform(
 		begin(seq),
@@ -74,6 +89,7 @@ void gene::reverseComplement (string& seq) {
 	reverse(seq.begin(), seq.end());
 
 }
+
 
 
 string gene::geneNT(const string& seq) {
@@ -128,14 +144,52 @@ string gene::geneAA(const string& seq) {
 
 //***************************************************************
 
+//cF->ntVariant(posN, ref, "N", -1.f); 
+void fasta::ntVariant(VCFmem* vx) {
+	if (vx->isINDEL()) {
+		if (vx->majorAllele()) {
+			if (vx->filtered()) {
+				;//do nothing
+			}
+			else {
+				INDEL(vx->getPos(), vx->getRef(), vx->getAlt(), vx->getFreq());
+			}
+		}
+		return; //skip indels for now
+	}
+	if (vx->majorAllele()) {
+		if (vx->filtered()) {
+			SNP(vx->getPos(), vx->getRef(), "N", vx->getFreq());
+		} else {
+			SNP(vx->getPos(), vx->getRef(), vx->getAlt(), vx->getFreq());
+			if (vx->conflicted()) { conflictCnt++; }
+		}
+	}
+
+}
+
+//structural variant (indel) of some sort
+void fasta::INDEL(int pos, string r, string a, float freq)
+{
+	INDELcnt++;
+	INDELpos.push_back(pos);
+	INDELfreq.push_back(freq);
+	INDELref.push_back(r);
+	INDELalt.push_back(a);//for now only catalogue.. needs to be applied later..
+}
+
+//single nucleotide polymorphism
 void fasta::SNP(int pos, string r, string a, float freq)
 { 
+	if (freq < 0.f || a == "N") { 
+		maskSeq(pos, pos + 1); //replace with N
+		UnctCnt++; return; 
+	}
 	if (seq[pos] != r[0] && toupper(seq[pos]) != 'N') {
 		char tmp = seq[pos];
-		throw std::runtime_error("Error: SNP position does not match reference sequence "+ header +" at position " + std::to_string(pos) + ": " + seq[pos] + " != " + r);
+		throw std::runtime_error("vcf2fna:: Error: SNP position does not match reference sequence " + header + " at position " + std::to_string(pos) + ": " + seq[pos] + " != " + r);
 	}
-	seq[pos] = a[0]; 
-	if (freq < 0.f || a == "N") { UnctCnt++; return; }
+	seq[pos] = a[0];
 	SNPsCnt++; 
 	SNPsPos.push_back(pos);
 	SNPfreqs.push_back(freq);
@@ -228,43 +282,187 @@ string gene::createHDtag(const string& seq, list<int>& SNPsPos, list<float>& SNP
 	return hd;
 }
 
-void fasta::writeAllGenes(options* opts, string& NTs, string& AAs, bool doNT, bool doAA) {
-	bool HDtags(opts->addHDTags); bool skipE(opts->skipEmptyContigs);
-	string ctg = getMutatedSeq();
+string fasta::getMutatedSeq(options* opts) {
+	if (mutSeqDone) { return mutSeq; }
+	mutSeq = seq;
+	//SNPs
+	for (size_t i = 0; i < mutSeq.length(); ++i) {
+		if (!seqUse[i]) {
+			mutSeq[i] = 'N'; //replace with N
+		}
+	}
+	if (INDELpos.size() == 0 || opts->reportINDELs) {
+		return mutSeq;
+	}
+	//INDELs
+	assert(INDELpos.size() == INDELalt.size());
+	assert(INDELpos.size() == INDELref.size());
+	assert(INDELpos.size() == INDELfreq.size());
+
+	//std::list<int>::iterator itPos; int i = (int)(INDELpos.size() );
+	//for (itPos = INDELpos.end(); itPos != INDELpos.begin(); itPos-- ) {
+	//	i--;
+	for (int i = (int(INDELpos.size()) - 1); i >= 0; i--) { // start from end of read that positions are not affected by earlier indels
+		int pos =  INDELpos[i];//(*itPos);
+		string ref = INDELref[i];
+		string alt = INDELalt[i];
+		if (alt == "N" || alt == ".") {
+			continue; //skip uncertain indels
+		}
+		if (alt == "<DEL>" || alt == "<INS>") {
+			cerr << "symbolic indels found:" << alt << " at position " << pos << ". Skipping these variants." << endl;
+			continue; //skip symbolic indels
+		}
+		//apply indel
+		//deletion
+		int refL = (int)(ref.length());
+		int altL = (int)(alt.length());
+		int difLen = refL - altL;
+		string obsRef = mutSeq.substr(pos, refL);
+		//int delLen = refL;
+		//first delete ref length from position
+		if (refL > 0) {
+			mutSeq.erase(pos , refL);
+		}
+		//and replace with alt sequence if any
+		if (alt.length() > 0) {
+			mutSeq.insert(pos+1 , alt);
+		}
+		//now apply to every gene coordinate
+		geneCol->correctCoords(pos, altL, refL);
+	}
+	mutSeqDone = true;
+
+
+
+	return mutSeq; 
+}  //
+
+
+int fasta::maskSeq(int start, int end,  bool repl) {
+	//unmask sequence from start to end (exclusive)
+	assert(seq.length() == seqUse.size());
+
+	//int replCnt(0);
+	if (start < 0 || end > seq.length() || start >= end) {
+		throw std::out_of_range("Invalid range for unmasking: " + to_string(start) + ", " + to_string(end) + ", " + to_string(seq.length()));
+	}
+	for (int i = start; i < end; ++i) {
+		//if (seqUse[i] == repl) { continue; }// Skip if already 'N'
+		
+		seqUse[i] = repl; //unmask position
+		//replCnt++;
+	}
+	int replCnt = end - start;
+	return replCnt;
+}
+int fasta::unmaskSeq(int start, int end) {
+	//unmask sequence from start to end (exclusive)
+	return maskSeq(start,end,true);
+}
+
+
+geneCollection::~geneCollection() { 
+	for (size_t i = 0; i < genes.size(); i++) { if (genes[i] != nullptr) { delete genes[i]; } }
+	for (size_t i = 0; i < genesMut.size(); i++) { if (genesMut[i] != nullptr) { delete genesMut[i]; } }
+}
+
+
+void geneCollection::prepMuts() {
+	if (mutsPrepared) { return; }
+	mutsPrepared = true; 
+
+	genesMut.clear(); genesMut.resize(genes.size(), nullptr);
+	for (size_t i = 0; i < genes.size(); i++) {
+		genesMut[i] = new gene(*genes[i]); //copy gene
+	}
+}
+
+
+void geneCollection::correctCoords(int pos, int altL, int refL) {
+	//needs to go through all genes and correct their coordinates based on indel at pos
+	//only genes after the indel position are affected
+	//alt:20 -ref:10 = 10   ; alt:5 - ref:10 = -5
+	int geneDiff = altL - refL;
+	for (size_t i = 0; i < genesMut.size(); ++i) {
+		if (genesMut[i]->geneEnd < pos && genesMut[i]->geneStart < pos) {
+			continue; //not affected
+		}
+		if (genesMut[i]->geneStart > pos) {
+			//fully after indel
+			genesMut[i]->geneStart += geneDiff;
+			genesMut[i]->geneEnd += geneDiff;
+		}
+		else {
+			//overlapping indel
+			genesMut[i]->geneEnd += geneDiff;
+			//start remains the same
+		}
+	}
+}
+
+
+void geneCollection::writeAllGenes(options* opts, string& NTs, string& AAs, 
+			bool doNT, bool doAA, fasta* fa, OutputStats* Ostats) {
+	//bool HDtags(opts->addHDTags); //bool skipE(opts->skipEmptyContigs);
+	int NonNcnt = fa->getNumNs();// (seq.length() - count(seq.begin(), seq.end(), 'N'));
+	if (NonNcnt == fa->getLength() && opts->skipEmptyContigs) {
+		return; //skip empty sequences
+	}
+	
+
+
+	string ctg = fa->getMutatedSeq(opts);
 	if (ctg.empty()) {
 		return; //skip empty sequences
 	}
-	int NonNcnt(seq.length() - count(seq.begin(), seq.end(), 'N'));
-	if (NonNcnt == 0 && skipE) {
-		return; //skip empty sequences
-	}
 	//string ret("");
-	for (size_t i = 0; i < genes.size(); ++i) {
-		string geneSeq = genes[i]->geneNT(ctg);
-		string hd = ">"+header + "_" + to_string(genes[i]->getIdx()+1);
-		if (HDtags) {
-			hd+=genes[i]->createHDtag(geneSeq, SNPsPos, SNPfreqs, NonNcnt);
+	for (size_t i = 0; i < genesMut.size(); ++i) {
+		string geneSeq = genesMut[i]->geneNT(ctg);
+		int geneNs = count(geneSeq.begin(), geneSeq.end(), 'N');
+		int geneNonNs = (int)geneSeq.length() - geneNs;
+		if (opts->skipEmptyGenes && (geneSeq.length() == 0 || 
+			!(geneSeq.length() - geneNs ) )) {
+			continue; //skip empty sequences
+		}
+		string hd = ">"+fa->header + "_" + to_string(genes[i]->getIdx()+1);
+		if (opts->addHDTags) {
+			hd+=genes[i]->createHDtag(geneSeq, fa->SNPsPos, fa->SNPfreqs, geneNonNs);
 		}
 		if (doNT) {
 			NTs += hd + "\n";
 			NTs += geneSeq + "\n";
-		} 
+			Ostats->totalGeneNTs += geneNonNs;
+		}
 		if (doAA){
 			AAs += hd + "\n";
-			AAs += genes[i]->geneAA(geneSeq)+"\n";
+			string AAseq = genesMut[i]->geneAA(geneSeq);
+			AAs += AAseq+"\n";
+			int geneXs = count(AAseq.begin(), AAseq.end(), 'X');
+			int geneNonXs = (int)AAseq.length() - geneXs;
+			Ostats->totalGeneAAs += geneNonXs;
 		}
+		Ostats->totalGenes++;
 	}
 	
 }
 
 
-string fasta::write(bool hdTags,bool skipEmpty) {
+string fasta::write(options* opts, OutputStats* Ostats){//
+	bool hdTags = opts->addHDTags;
+	bool skipEmpty = opts->skipEmptyContigs;
 	string ret("");
-	if (skipEmpty && getNumNs()==getLength()){
+	int numNs = getNumNs();
+	if (skipEmpty && numNs==getLength()){
 		return ret; //skip empty sequences
 	}
+	prepMuts();
+
+	Ostats->totalContigs++;
+	Ostats->totalCtgNTs += (getLength() - numNs);
+
 	ret += getMutatedHeader(hdTags) + "\n";
-	ret += getMutatedSeq() + "\n";
+	ret += getMutatedSeq(opts) + "\n";
 	return ret;
 }
 
@@ -273,9 +471,9 @@ void fasta::addGene(string id, int sta, int end, string strand, string type, int
 	AG->setStrand(strand);
 	AG->setType(type);
 	AG->setTranslationTable(transTab);
-	AG->setNumOnContig(genes.size());
+	AG->setNumOnContig(geneCol->size());
 	AG->setPartial(partial);
-	genes.push_back(AG);
+	geneCol->push_back(AG);
 }
 
 
@@ -290,6 +488,7 @@ refAssembly::refAssembly(options* opt):
 	const std::string& filename = opt->refFasta;
 	cout << "Reading reference assembly from: " << filename << endl;
 	istream* file = openGZUZ(filename);
+	long totalBp(0);
 	std::string line; string sequence(""); string header("");
 	while (std::getline(*file, line)) {
 		if (line.empty() ) {
@@ -299,6 +498,7 @@ refAssembly::refAssembly(options* opt):
 			// Store the previous sequence before starting a new one
 			if (!sequence.empty()) {
 				fastas.push_back(new fasta(sequence, header));
+				totalBp += sequence.length();
 				sequence.clear();
 				NSeqs++;
 			}
@@ -312,6 +512,7 @@ refAssembly::refAssembly(options* opt):
 	//add last readin batch:
 	if (!sequence.empty()) {
 		fastas.push_back(new fasta(sequence, header));
+		totalBp += sequence.length();
 		sequence.clear();
 		NSeqs++;
 	}
@@ -322,7 +523,7 @@ refAssembly::refAssembly(options* opt):
 		hd2ID[fastas[i]->getHeader()] = i;
 	}
 
-	cout << "Number of sequences: " << NSeqs << endl;
+	cout << "Number of sequences: " << NSeqs << " containing "<< totalBp<< "bp."<< endl;
 }
 
 refAssembly::~refAssembly() {
@@ -428,93 +629,125 @@ void refAssembly::readGFF() {
 		curFasta->addGene("",sta,sto,strand,type,TT, partial);
 		lastPos = sto;
 	}
-	cout << "GFF filter: Number of positions replaced with N: " << lastPos << endl;
+	//cout << "GFF filter: Number of positions replaced with N: " << lastPos << endl;
 	delete file;
 }
 
-void refAssembly::readDepth() {
+
+void refAssembly::maskAllSeqs(const string& inF, int minDepth) {
 	
 	//open connection to file
-	istream* in = openGZUZ(opts->depthF);
-	
+	istream* in = openGZUZ(inF);
 
-	cout << "Reading depth file from: " << opts->depthF << endl;
-	int minDepth = opts->minDepthPar;
+	cout << "Reading depth file from: " << inF << endl;
 
-	string line; string curChrom(""); int curChromIdx(-1); string curChromSeq("");
+	string line; string curChrom(""); //int curChromIdx(-1); string curChromSeq("");
+	fasta* curFasta(nullptr); int curChromL(0);
 	int lastPos(0);
-	int cntPosKept(0), cntPosRm(0);//counting how many positions are kept and removed based on depth profile
+	long totalChromL(0);
+	long cntPosKept(0), cntPosRm(0);//counting how many positions are kept and removed based on depth profile
 	int curPosKept(0), curPosRm(0);
+	vector<long> posKeptPerDepth(10 , 0); //up to depth 1000
+	
+	
+	//start reading depth file line by line
+	//example: "A.14.1640M2__C15_L=476= 25      104     2"
 	while (std::getline(*in, line)) {
 		if (line.empty()) {
 			continue; // Skip empty lines
 		}
 		std::istringstream iss(line);
 		string header;
-		int sta,sto, depth;
-		if (!(iss >> header >> sta>> sto>>depth)) {
-			throw std::runtime_error("Error reading depth file: " + line +"\n" + opts->depthF);
+		int sta, sto, depth;
+		if (!(iss >> header >> sta >> sto >> depth)) {
+			throw std::runtime_error("Error reading depth file: " + line + "\n" + inF);
 		}
 		if (curChrom != header) {//switch to new chromosome
-			if (curChromIdx >= 0) {
-				//next chromosome: copy old results over..
-				if (lastPos < fastas[curChromIdx]->getLength()) {//any missing bases at the end of the sequence?:
-					int repl = replaceWithNs(curChromSeq, lastPos, fastas[curChromIdx]->getLength());
-					curPosRm += repl; curPosKept += (fastas[curChromIdx]->getLength() - lastPos - repl);
-					//cerr << curChrom << endl;//DEBUG
-				}
-				fastas[curChromIdx]->setSeq(curChromSeq);
-				//collect stats..
-				cntPosKept += curPosKept; cntPosRm += curPosRm;
-			}
-			curPosKept = 0; curPosRm = 0;
+			curPosRm = curChromL - curPosKept;
+			cntPosRm += curPosRm;
+			cntPosKept += curPosKept;
+			curPosKept = curPosRm = 0;
+			
 			curChrom = header;
-			auto it = hd2ID.find(header);
-			if (it != hd2ID.end()) {
-				curChromIdx = it->second;
-			} else {
-				throw std::runtime_error("Header not found in depth file: " + header);
-			}
-			curChromSeq = fastas[curChromIdx]->getSeq();
+			curFasta = getFasta(curChrom);
+			curChromL = curFasta->getLength();
+			totalChromL += curChromL;
 		}
-		//some baesic checks:
-		if (sto > curChromSeq.length()) {
-			throw std::runtime_error("Error reading depth file: " + line + "\n" + opts->depthF);
+		//some basic checks:
+		if (sto > curChromL) {
+			throw std::runtime_error("Error: Stop post seq length: " + line + "\n" + inF);
 		}
 		//replace  seq with N where < depthThreshold
-		if (lastPos < sta) {
-			int repl = replaceWithNs(curChromSeq, 0, sta);
-			curPosRm += repl; curPosKept += (sta - repl);
-		}
-		if (depth < minDepth) {
-			int repl = replaceWithNs(curChromSeq, sta, sto);
-			curPosRm += repl; curPosKept += (sto - sta - repl);
-		} else {
-			;//nothing...
-			curPosKept += (sto - sta);
+		if (depth >= minDepth) {
+			curPosKept += curFasta->unmaskSeq(sta, sto);
 		}
 		lastPos = sto;
-
-
+		//for stats only, check at which depth positions where kept
+		for (int depthIdx = 0; depthIdx < posKeptPerDepth.size(); depthIdx++) {
+			if (depth >= (int)depthIdx) {
+				posKeptPerDepth[depthIdx] += (sto - sta);
+			} else {
+				break;
+			}
+		}
 	}
-
-	cout << "Depth filter ("<< minDepth << "): Number of positions kept: " << cntPosKept << " removed: "<< cntPosRm << endl;
-	//if (file.is_open()) {file.close();}
 	delete in;
+	
+	//last iteration
+	curPosRm = curChromL - curPosKept;
+	cntPosRm += curPosRm;
+	cntPosKept += curPosKept;
+	//general stats on depth filter
+	cout << "Depth filter (" << minDepth << "): Number of positions kept: " << cntPosKept << " removed: " << cntPosRm << endl;
+
+	//stats on depth filter per depth bin
+	cout << "Theoretical depth filter stats per depth bin, increasing from 0 to "<< posKeptPerDepth.size() << " (of max "<< totalChromL<<"): " ;
+	for (size_t depthIdx = 0; depthIdx < posKeptPerDepth.size(); depthIdx++) {
+		cout << posKeptPerDepth[depthIdx];
+		if (depthIdx+1 != posKeptPerDepth.size()) {cout<< ", "; }
+	}
+	cout << endl;
+
+
+}
+
+
+void refAssembly::readDepth() {
+
+	for (size_t i = 0; i < opts->depthF.size(); i++) {
+		int minDepth = opts->minDepthPar[i];
+		string inF(opts->depthF[i]);
+		this->maskAllSeqs(inF, minDepth);
+	}
 }
 
 
 void refAssembly::writeOutputs() {
-	cout << "Writing consensus contigs and genes to output files.." << endl;
-	if (opts->outputTypes.find("C") != string::npos) {
-		writeContigs();
-	}
-	if (opts->outputTypes.find("N") != string::npos || opts->outputTypes.find("A") != string::npos) {
-		writeGenes();
+	if (opts->outputTypes.length() > 0) {
+		cout << "Writing consensus contigs and genes to output files.." << endl;
 	}
 
+	OutputStats* Ostats = new OutputStats();
+
+	if (opts->outputTypes.find("C") != string::npos) {
+		writeContigs(Ostats);
+	}
+	if (opts->outputTypes.find("N") != string::npos || opts->outputTypes.find("A") != string::npos) {
+		writeGenes(Ostats);
+	}
+	if (true || opts->outputTypes.length() == 0) {//simulate writing contigs to get bp written message
+		long totalBp(0);
+		for (size_t i = 0; i < fastas.size(); ++i) {
+			totalBp += fastas[i]->getNonNcount();
+		}
+		cout << "Total bp that can be determined: " << totalBp << " in " << fastas.size() << " entries." << endl;
+	}
+
+	Ostats->printStats();
+	delete Ostats;
+
 }
-void refAssembly::writeGenes() {
+void refAssembly::writeGenes(OutputStats* Ostats) {
 	string outFastaNT(opts->outGeneNT);
 	string outFastaAA (opts->outGeneAA); 
 	bool wrAA(false), wrNT(false);
@@ -536,7 +769,8 @@ void refAssembly::writeGenes() {
 	//main translation work happens here:
 	for (size_t i = 0; i < fastas.size(); ++i) {
 		string NT(""), AA("");
-		fastas[i]->writeAllGenes(opts, NT, AA, wrNT, wrAA);
+		fastas[i]->prepMuts();
+		fastas[i]->writeAllGenes(opts, NT, AA, wrNT, wrAA, Ostats);
 		if (wrAA) {
 			*outFileAA << AA;
 		}
@@ -551,7 +785,7 @@ void refAssembly::writeGenes() {
 	
 }
 
-void refAssembly::writeContigs() {
+void refAssembly::writeContigs(OutputStats* Ostats) {
 	const string& outFasta(opts->outfna);
 	if (outFasta.empty()) {
 		cout<<"No output contig file requested..";
@@ -561,7 +795,7 @@ void refAssembly::writeContigs() {
 	ostream* outFile = writeGZUZ(outFasta);
 
 	for (size_t i = 0; i < fastas.size(); ++i) {
-		(*outFile) << fastas[i]->write(opts->addHDTags,opts->skipEmptyContigs);
+		(*outFile) << fastas[i]->write(opts, Ostats);
 	}
 	//close open file connections..
 	delete outFile;

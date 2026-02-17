@@ -20,7 +20,7 @@ ini_AA();
 Benchmark* bench = new Benchmark("Time vcf2fasta ");
 bench->start();
 
-//1 read_vcf_file in the command line arguments
+//1 read command line arguments
 options* opts = new options(argc, argv);
 
 
