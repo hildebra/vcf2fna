@@ -8,9 +8,15 @@ using namespace std;
 
 
 class VCFmem; // forward declaration
+class fasta; // forward declaration
 
 void ini_AA();
 
+
+struct VariantStats {
+	int snpCNT, indelCNT, snpFILT, indelFILT, unsrSNP, unsrINDEL, indelUsed, SNPused, conflictCnt;
+	VariantStats() :snpCNT(0), indelCNT(0), snpFILT(0), indelFILT(0), unsrSNP(0), unsrINDEL(0), indelUsed(0), SNPused(0), conflictCnt(0) {}
+};
 
 struct OutputStats {
 	int totalContigs, totalCtgNTs, totalGenes, totalGeneNTs, totalGeneAAs;
@@ -26,7 +32,8 @@ struct OutputStats {
 class gene
 {
 public:
-	gene() : geneID(""), geneStart(0), geneEnd(0), geneLength(0), geneStrand(true), numOnContig(-1){}
+	gene() : geneID(""), geneStart(0), geneEnd(0), 
+			geneLength(0), geneStrand(true), numOnContig(-1), accumDepth(0){}
 	gene(string id, int sta, int end);// : geneID(id), geneStart(sta), geneEnd(end), geneLength(end - sta), geneStrand(true), numOnContig(-1) {}
 	gene(gene* GG);
 	~gene() {}
@@ -36,11 +43,13 @@ public:
 	void setNumOnContig(int n) { numOnContig = n; }
 	void setPartial(string p) { partial = p; }
 
+	void addAccumDepth(int d) { accumDepth += d; }
+	float getAvgDepth() { return (float)accumDepth / geneLength; }
+
 	string geneNT(const string& seq);
 	string geneAA(const string& seq);
 	int getIdx() { return numOnContig; }
-	string createHDtag(const string& seq, list<int>& SNPsPos, list<float>& SNPfreqs,
-		int& nonNs );
+	string createHDtag(const string& seq, fasta* fa, int& nonNs );
 
 private:
 	//variables
@@ -53,6 +62,7 @@ private:
 	int translationTable;	// translation table for the gene
 	int numOnContig;	// number of genes on the contig
 	string partial;	// partial gene: 00:no, 01:5', 10:3', 11:both
+	int accumDepth; //accumulated depth in the gene, used for calculating average depth
 
 	//functions
 	void reverseComplement( string& seq);
@@ -75,6 +85,7 @@ public:
 	void push_back(gene* g) { genes.push_back(g); }
 	void correctCoords(int pos, int altL, int refL);
 	void prepMuts();
+	void depthInGenes(int sta, int sto, int depth);
 private:
 	vector<gene*> genes;
 	vector<gene*> genesMut;
@@ -101,7 +112,7 @@ public:
 	int getLength() const { return (int)seq.length(); }
 	void setSeq(string s) { seq = s; }
 	void resetCnts() { length = seq.length(); }
-	void ntVariant(VCFmem* vx);
+	void ntVariant(VCFmem* vx, VariantStats* Vstats);
 	string write(options* opts, OutputStats* Ostats);
 	void addGene(string id, int sta, int end,string strand,string type,int transTab,string partial);
 	//void writeAllGenes(options* opts, string& NTs, string& AAs, bool doNT, bool doAA);
@@ -113,6 +124,10 @@ public:
 		geneCol->writeAllGenes(opts, NTs, AAs, doNT, doAA, this, Ostats);
 	}
 	void prepMuts() { geneCol->prepMuts();  }
+	geneCollection* getGeneCollection() { return geneCol; } 
+
+	list<int>& getSNPsPos() { return SNPsPos; }
+	list<float>& getSNPfreqs() { return SNPfreqs; }
 
 
 private:
@@ -145,6 +160,7 @@ private:
 	geneCollection* geneCol;
 
 	friend class geneCollection; // Allows geneCollection to see vars
+	//friend class gene; // Allows geneCollection to see vars
 
 };
 
@@ -168,7 +184,7 @@ private:
 //functions
 	void writeContigs(OutputStats* Ostats);
 	void writeGenes(OutputStats* Ostats);
-	void maskAllSeqs(const string&, int minDepth);
+	void processDepth(const string&, int minDepth);
 
 
 

@@ -60,7 +60,8 @@ typedef unsigned long ulong;
 //0.22: 12.1.26: INDELS now also handled in gene sequences
 //0.23: 5.2.26: fix indel options that were too strict
 //0.24: 16.2.26: bug removed that removed contigs with 0 non-Ns from gene NT & AA files. Also added stats on genes & NTs & AA written 
-const string vcf2fnaVERSION = "0.24";
+//0.25: 17.2.26: added depth stat per gene, more precise reporting on actually implemented SNPs
+const string vcf2fnaVERSION = "0.25";
 
 
 

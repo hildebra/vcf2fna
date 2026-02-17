@@ -26,8 +26,8 @@ options* opts = new options(argc, argv);
 
 //2 read_vcf_file reference genome
 refAssembly* refFA = new refAssembly(opts);
-refFA->readDepth();
 refFA->readGFF();
+refFA->readDepth();
 bench->now_total_time();
 
 

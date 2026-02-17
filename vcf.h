@@ -94,10 +94,6 @@ private:
 };
 
 
-struct VariantStats {
-	int snpCNT, indelCNT, snpFILT, indelFILT, unsrSNP, unsrINDEL, indelUsed, SNPused, conflictCnt;
-	VariantStats() :snpCNT(0), indelCNT(0), snpFILT(0), indelFILT(0), unsrSNP(0), unsrINDEL(0), indelUsed(0), SNPused(0), conflictCnt(0) {}
-};
 
 class VCFReader {
 public:

@@ -68,14 +68,15 @@ std::string to_string_with_precision(const T a_value, const int n = 6)
 //class gene
 
 gene::gene(string id, int sta, int end) : 
-	geneID(id), geneStart(sta), geneEnd(end), geneLength(end - sta), geneStrand(true), numOnContig(-1) 
+	geneID(id), geneStart(sta), geneEnd(end), geneLength(end - sta), geneStrand(true), 
+	numOnContig(-1) , accumDepth(0)
 {
 	assert(geneEnd >= geneStart);
 }
 
 gene::gene(gene* GG) : geneID(GG->geneID), geneStart(GG->geneStart), geneEnd(GG->geneEnd), geneLength(GG->geneLength),
 geneStrand(GG->geneStrand), type(GG->type), translationTable(GG->translationTable),
-numOnContig(GG->numOnContig), partial(GG->partial) 
+numOnContig(GG->numOnContig), partial(GG->partial), accumDepth(GG->accumDepth)
 {
 }
 
@@ -145,26 +146,49 @@ string gene::geneAA(const string& seq) {
 //***************************************************************
 
 //cF->ntVariant(posN, ref, "N", -1.f); 
-void fasta::ntVariant(VCFmem* vx) {
+void fasta::ntVariant(VCFmem* vx, VariantStats* Vstats) {
+	//don't include if position is not deep enough in first place..
+	if (vx->getPos() < seqUse.size() && !seqUse[vx->getPos()]) { return; }
 	if (vx->isINDEL()) {
+		Vstats->indelCNT++;
 		if (vx->majorAllele()) {
 			if (vx->filtered()) {
-				;//do nothing
+				Vstats->unsrINDEL++; //cF->ntVariant(posN, ref, "N", -1.f); 
 			}
 			else {
 				INDEL(vx->getPos(), vx->getRef(), vx->getAlt(), vx->getFreq());
+				Vstats->indelUsed++;
 			}
 		}
+		if (vx->filtered()) {
+			Vstats->indelFILT++;
+		}
+
 		return; //skip indels for now
 	}
+
+	if (!vx->isSNP()) {
+		return;//not sure what this is.. skip for now
+	}
+
+	Vstats->snpCNT++;
+
+	//implement SNPs (maybe)
 	if (vx->majorAllele()) {
 		if (vx->filtered()) {
+			Vstats->unsrSNP++;
 			SNP(vx->getPos(), vx->getRef(), "N", vx->getFreq());
 		} else {
+			Vstats->SNPused++;
 			SNP(vx->getPos(), vx->getRef(), vx->getAlt(), vx->getFreq());
-			if (vx->conflicted()) { conflictCnt++; }
+			if (vx->conflicted()) { conflictCnt++; Vstats->conflictCnt++;
+			}
 		}
+	} 
+	if (vx->filtered()) {
+		Vstats->snpFILT++;
 	}
+
 
 }
 
@@ -230,12 +254,14 @@ string fasta::getMutatedHeader(bool hdTags) {
 	return ret;
 }  
 
-string gene::createHDtag(const string& seq, list<int>& SNPsPos, list<float>& SNPfreqs,
-	int& nonNs) {
+string gene::createHDtag(const string& seq, fasta* fa, int& nonNs) {
+	list<int>& SNPsPos = fa->getSNPsPos();
+	list<float>& SNPfreqs = fa->getSNPfreqs();
 	//create a tag emulating scores from contig2fasta.py
 	std::list<int>::iterator it;
 	std::list<float>::iterator it2;
 	string hd("");
+	hd += " D=" + to_string_with_precision(this->getAvgDepth(),2);
 	hd += " P=[";
 	string freqV;
 	it2 = SNPfreqs.begin();
@@ -367,7 +393,19 @@ geneCollection::~geneCollection() {
 	for (size_t i = 0; i < genesMut.size(); i++) { if (genesMut[i] != nullptr) { delete genesMut[i]; } }
 }
 
-
+//gets info from depth file, apply to genes potentially in frame
+void geneCollection::depthInGenes(int sta, int sto, int depth) {
+	for (size_t i = 0; i < genes.size(); ++i) {
+		if (genes[i]->geneEnd < sta || genes[i]->geneStart > sto) {
+			continue; //not affected
+		}
+		//overlapping depth region
+		int sta2 = max(sta, genes[i]->geneStart);
+		int sto2 = min(sto, genes[i]->geneEnd);
+		int overlap = sto2 - sta2 ;
+		genes[i]->addAccumDepth(overlap * depth);
+	}
+}
 void geneCollection::prepMuts() {
 	if (mutsPrepared) { return; }
 	mutsPrepared = true; 
@@ -427,7 +465,7 @@ void geneCollection::writeAllGenes(options* opts, string& NTs, string& AAs,
 		}
 		string hd = ">"+fa->header + "_" + to_string(genes[i]->getIdx()+1);
 		if (opts->addHDTags) {
-			hd+=genes[i]->createHDtag(geneSeq, fa->SNPsPos, fa->SNPfreqs, geneNonNs);
+			hd+=genes[i]->createHDtag(geneSeq,fa, geneNonNs);
 		}
 		if (doNT) {
 			NTs += hd + "\n";
@@ -634,7 +672,7 @@ void refAssembly::readGFF() {
 }
 
 
-void refAssembly::maskAllSeqs(const string& inF, int minDepth) {
+void refAssembly::processDepth(const string& inF, int minDepth) {
 	
 	//open connection to file
 	istream* in = openGZUZ(inF);
@@ -648,7 +686,10 @@ void refAssembly::maskAllSeqs(const string& inF, int minDepth) {
 	long cntPosKept(0), cntPosRm(0);//counting how many positions are kept and removed based on depth profile
 	int curPosKept(0), curPosRm(0);
 	vector<long> posKeptPerDepth(10 , 0); //up to depth 1000
-	
+
+
+	geneCollection* genes(nullptr);
+	int curGeneDepthAccum(0); int geneIdx(0);
 	
 	//start reading depth file line by line
 	//example: "A.14.1640M2__C15_L=476= 25      104     2"
@@ -672,11 +713,14 @@ void refAssembly::maskAllSeqs(const string& inF, int minDepth) {
 			curFasta = getFasta(curChrom);
 			curChromL = curFasta->getLength();
 			totalChromL += curChromL;
+			genes = curFasta->getGeneCollection();
 		}
+		
 		//some basic checks:
 		if (sto > curChromL) {
 			throw std::runtime_error("Error: Stop post seq length: " + line + "\n" + inF);
 		}
+		genes->depthInGenes(sta, sto, depth);
 		//replace  seq with N where < depthThreshold
 		if (depth >= minDepth) {
 			curPosKept += curFasta->unmaskSeq(sta, sto);
@@ -717,7 +761,7 @@ void refAssembly::readDepth() {
 	for (size_t i = 0; i < opts->depthF.size(); i++) {
 		int minDepth = opts->minDepthPar[i];
 		string inF(opts->depthF[i]);
-		this->maskAllSeqs(inF, minDepth);
+		this->processDepth(inF, minDepth);
 	}
 }
 

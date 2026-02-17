@@ -110,7 +110,7 @@ void VCFReader::read_vcf_file(istream* fp, int VCFnum, VCFcollection* Vcol) {
 			
 			
 			//now apply variant to contig
-			cF->ntVariant(vcf);
+			cF->ntVariant(vcf, Vstats);
 
 			//collect stats for this vcf entry
 			collectVCFstats(vcf); 
@@ -135,38 +135,7 @@ void VCFReader::read_vcf_file(istream* fp, int VCFnum, VCFcollection* Vcol) {
 void VCFReader::collectVCFstats(VCFmem* vcf)
 {
 
-	//count stats up...
-	if (vcf->isINDEL()) {
-		Vstats->indelCNT++;
-		if (vcf->filtered()) {
-			Vstats->indelFILT++;
-			if (vcf->majorAllele()) {
-				Vstats->unsrINDEL++; //cF->ntVariant(posN, ref, "N", -1.f); 
-			} //replace with N
-		}
-		else if (vcf->majorAllele()) {//only replace consensus..
-			//currently not used
-			Vstats->indelUsed++;
-		}
-	}
-
-	//if (DE1) { cerr << "Z "; }
-
-	if (vcf->isSNP()) {
-		Vstats->snpCNT++;
-		if (vcf->filtered()) {
-			Vstats->snpFILT++;
-			//high freq but unsure? replace with N..
-			if (vcf->majorAllele()) {
-				Vstats->unsrSNP++;
-			}
-		}
-		else if (vcf->majorAllele()) {//only replace consensus..
-			Vstats->SNPused++;
-			if (vcf->conflicted()) { Vstats->conflictCnt++; }
-
-		}
-	}
+	;//currently not used
 }
 
 /*
