@@ -95,10 +95,10 @@ void gene::reverseComplement (string& seq) {
 
 string gene::geneNT(const string& seq) {
 	string ret("");
-	if (seq.length() < geneEnd) {
+	if (seq.length() <= geneEnd) {
 		throw std::runtime_error("Error: Gene sequence length is less than expected: " + to_string(seq.length()) + " < " + to_string(geneEnd));
 	}
-	if (seq.length() < geneStart) {
+	if (seq.length() <= geneStart) {
 		throw std::runtime_error("Error: Gene sequence length is less than expected: " + to_string(seq.length()) + " < " + to_string(geneStart));
 	}
 	ret = seq.substr(geneStart, geneEnd - geneStart + 1); 
@@ -146,7 +146,8 @@ string gene::geneAA(const string& seq) {
 //***************************************************************
 
 //cF->ntVariant(posN, ref, "N", -1.f); 
-void fasta::ntVariant(VCFmem* vx, VariantStats* Vstats) {
+void fasta::ntVariant(VCFmem* vx, VariantStats* Vstats, VCFfilterStats* filStats,
+	options* opt) {
 	//don't include if position is not deep enough in first place..
 	if (vx->getPos() < seqUse.size() && !seqUse[vx->getPos()]) { return; }
 	if (vx->isINDEL()) {
@@ -163,31 +164,45 @@ void fasta::ntVariant(VCFmem* vx, VariantStats* Vstats) {
 		if (vx->filtered()) {
 			Vstats->indelFILT++;
 		}
-
 		return; //skip indels for now
 	}
 
 	if (!vx->isSNP()) {
 		return;//not sure what this is.. skip for now
 	}
-
+	/// ************************* SNP starts here *************************
 	Vstats->snpCNT++;
 
 	//implement SNPs (maybe)
 	if (vx->majorAllele()) {
 		if (vx->filtered()) {
+			Vstats->majorAlleleFilt++;//snpFILT
 			Vstats->unsrSNP++;
-			SNP(vx->getPos(), vx->getRef(), "N", vx->getFreq());
+			filStats->mumaFilt->addMut(vx->getRef(), vx->getAlt());
+			SNP(vx->getPos(), vx->getRef(), "N", -1.f);// vx->getFreq());
 		} else {
-			Vstats->SNPused++;
+			Vstats->majorAllele++;//SNPused
+			filStats->muma->addMut(vx->getRef(), vx->getAlt());
 			SNP(vx->getPos(), vx->getRef(), vx->getAlt(), vx->getFreq());
 			if (vx->conflicted()) { conflictCnt++; Vstats->conflictCnt++;
 			}
 		}
-	} 
-	if (vx->filtered()) {
-		Vstats->snpFILT++;
 	}
+	else { //minor alleles.. for stats only, not applied to sequence
+		if (vx->filtered()) {
+			filStats->mumaLowFreqFilt->addMut(vx->getRef(), vx->getAlt());
+			Vstats->minorAlleleFilt++;
+		} else {
+			filStats->mumaLowFreq->addMut(vx->getRef(), vx->getAlt());
+			Vstats->minorAllele++;
+			if (opt->maskMinorAllele) {
+				SNP(vx->getPos(), vx->getRef(), "N", -1.f);//
+			}
+		}
+	}
+	/*if (vx->filtered()) {
+		Vstats->unsrSNP++;
+	}*/
 
 
 }
@@ -212,11 +227,11 @@ void fasta::SNP(int pos, string r, string a, float freq)
 	if (seq[pos] != r[0] && toupper(seq[pos]) != 'N') {
 		char tmp = seq[pos];
 		throw std::runtime_error("vcf2fna:: Error: SNP position does not match reference sequence " + header + " at position " + std::to_string(pos) + ": " + seq[pos] + " != " + r);
+		SNPsCnt++;
+		SNPsPos.push_back(pos);
+		SNPfreqs.push_back(freq);
 	}
 	seq[pos] = a[0];
-	SNPsCnt++; 
-	SNPsPos.push_back(pos);
-	SNPfreqs.push_back(freq);
 }
 
 
@@ -317,7 +332,7 @@ string fasta::getMutatedSeq(options* opts) {
 			mutSeq[i] = 'N'; //replace with N
 		}
 	}
-	if (INDELpos.size() == 0 || opts->reportINDELs) {
+	if (INDELpos.empty() || !opts->reportINDELs) {
 		return mutSeq;
 	}
 	//INDELs
@@ -366,16 +381,14 @@ string fasta::getMutatedSeq(options* opts) {
 
 
 int fasta::maskSeq(int start, int end,  bool repl) {
-	//unmask sequence from start to end (exclusive)
+	//mask sequence from start to end (exclusive)
 	assert(seq.length() == seqUse.size());
 
 	//int replCnt(0);
 	if (start < 0 || end > seq.length() || start >= end) {
 		throw std::out_of_range("Invalid range for unmasking: " + to_string(start) + ", " + to_string(end) + ", " + to_string(seq.length()));
 	}
-	for (int i = start; i < end; ++i) {
-		//if (seqUse[i] == repl) { continue; }// Skip if already 'N'
-		
+	for (int i = start; i < end; ++i) {		
 		seqUse[i] = repl; //unmask position
 		//replCnt++;
 	}
@@ -402,7 +415,7 @@ void geneCollection::depthInGenes(int sta, int sto, int depth) {
 		//overlapping depth region
 		int sta2 = max(sta, genes[i]->geneStart);
 		int sto2 = min(sto, genes[i]->geneEnd);
-		int overlap = sto2 - sta2 ;
+		int overlap = sto2 - sta2 +1;
 		genes[i]->addAccumDepth(overlap * depth);
 	}
 }
@@ -680,7 +693,7 @@ void refAssembly::processDepth(const string& inF, int minDepth) {
 	cout << "Reading depth file from: " << inF << endl;
 
 	string line; string curChrom(""); //int curChromIdx(-1); string curChromSeq("");
-	fasta* curFasta(nullptr); int curChromL(0);
+	fasta* curFasta(nullptr); int curChromL(0);  // Initialized to 0
 	int lastPos(0);
 	long totalChromL(0);
 	long cntPosKept(0), cntPosRm(0);//counting how many positions are kept and removed based on depth profile
@@ -703,10 +716,13 @@ void refAssembly::processDepth(const string& inF, int minDepth) {
 		if (!(iss >> header >> sta >> sto >> depth)) {
 			throw std::runtime_error("Error reading depth file: " + line + "\n" + inF);
 		}
+		assert(sta <= sto);
 		if (curChrom != header) {//switch to new chromosome
-			curPosRm = curChromL - curPosKept;
-			cntPosRm += curPosRm;
-			cntPosKept += curPosKept;
+			if (!curChrom.empty()) {
+				curPosRm = curChromL - curPosKept;
+				cntPosRm += curPosRm;
+				cntPosKept += curPosKept;
+			}
 			curPosKept = curPosRm = 0;
 			
 			curChrom = header;
@@ -720,6 +736,7 @@ void refAssembly::processDepth(const string& inF, int minDepth) {
 		if (sto > curChromL) {
 			throw std::runtime_error("Error: Stop post seq length: " + line + "\n" + inF);
 		}
+		curFasta->addDepth(sta, sto, depth);
 		genes->depthInGenes(sta, sto, depth);
 		//replace  seq with N where < depthThreshold
 		if (depth >= minDepth) {

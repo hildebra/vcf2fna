@@ -61,7 +61,12 @@ typedef unsigned long ulong;
 //0.23: 5.2.26: fix indel options that were too strict
 //0.24: 16.2.26: bug removed that removed contigs with 0 non-Ns from gene NT & AA files. Also added stats on genes & NTs & AA written 
 //0.25: 17.2.26: added depth stat per gene, more precise reporting on actually implemented SNPs
-const string vcf2fnaVERSION = "0.25";
+//0.26: 20.2.26: further bugs addressed
+//0.27: 26.2.26: added filter stats reports for SNPs
+//0.28: 27.2.26: added ts/tv and mutMatrix
+//0.29: dynamic depth-dependent filtering, indel prox
+//0.30: 4.3.26: made options accessible
+const string vcf2fnaVERSION = "0.30";
 
 
 
@@ -106,6 +111,7 @@ public:
 	string outputTypes = "";//each letter is one additional output
 	vector<string> seqPlatform;//ill, PB, ONT
 	uint threads = 1;
+	uint indelRange = 5;
 	vector<int> minDepthPar;
 	int minCallQual;
 	float minFS, minMQ0F, minBQBZ, minSP;//filtering of vcf
@@ -114,7 +120,9 @@ public:
 	bool skipEmptyGenes;//skip empty genes in printing gene file
 	bool debug1;//prints vcf lines..
 	bool reportINDELs;
-
+	bool maskMinorAllele;
+	float minCallQualAdaptive;//if >0, minCallQual is adapted to the sequencing platform (e.g. lower for PB than for Illumina)
+	float depthFilterScale; // if DP < mean contig depth *x, filter. Default: 0.25
 
 };
 

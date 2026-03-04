@@ -9,13 +9,24 @@ using namespace std;
 
 class VCFmem; // forward declaration
 class fasta; // forward declaration
-
+class VCFfilterStats; // forward declaration
 void ini_AA();
 
 
 struct VariantStats {
-	int snpCNT, indelCNT, snpFILT, indelFILT, unsrSNP, unsrINDEL, indelUsed, SNPused, conflictCnt;
-	VariantStats() :snpCNT(0), indelCNT(0), snpFILT(0), indelFILT(0), unsrSNP(0), unsrINDEL(0), indelUsed(0), SNPused(0), conflictCnt(0) {}
+	int snpCNT, indelCNT, snpFILT, indelFILT, unsrSNP, 
+		unsrINDEL, indelUsed, SNPused, conflictCnt,
+		majorAllele, majorAlleleFilt, minorAllele, minorAlleleFilt;
+	VariantStats() :snpCNT(0), indelCNT(0), snpFILT(0), indelFILT(0), unsrSNP(0), 
+		unsrINDEL(0), indelUsed(0), SNPused(0), conflictCnt(0),
+		majorAllele(0), majorAlleleFilt(0), minorAllele(0), minorAlleleFilt(0){}
+	void printSNPstats() {
+		cout << "SNP stats: " << endl;
+		cout << "  - Found " << snpCNT << " SNPs and " << indelCNT << " INDELS." << endl;
+		cout << "  - Filtered " << majorAlleleFilt << ", "<< minorAlleleFilt << "; " << indelFILT << " entries (major, minor SNP; INDEL)." << endl;
+		cout << "  - Passing Filters: " << majorAllele << ", " << minorAllele << "; " << indelUsed << " entries (major, minor SNPs; INDELS). Conflicts resolved: " << conflictCnt << endl;
+		cout << "  - Unsure: " << unsrSNP << ";" << unsrINDEL << " (SNPs; INDELS - replaced with N)" << endl;
+	}
 };
 
 struct OutputStats {
@@ -101,7 +112,7 @@ public:
 	fasta(string s, string h) :seq(s), mutSeq(""),mutSeqDone(false),
 		header(h), seqUse(s.length(), false), length(s.length()),
 		SNPsCnt(0), UnctCnt(0),  SNPsPos(0), SNPfreqs(0),conflictCnt(0),
-		INDELcnt(0),INDELpos(0),INDELfreq(0), geneCol(nullptr)
+		INDELcnt(0),INDELpos(0),INDELfreq(0), depthAccum(0), geneCol(nullptr)
 	{
 		geneCol = new geneCollection();
 	}
@@ -112,7 +123,7 @@ public:
 	int getLength() const { return (int)seq.length(); }
 	void setSeq(string s) { seq = s; }
 	void resetCnts() { length = seq.length(); }
-	void ntVariant(VCFmem* vx, VariantStats* Vstats);
+	void ntVariant(VCFmem* vx, VariantStats* Vstats, VCFfilterStats*,options*);
 	string write(options* opts, OutputStats* Ostats);
 	void addGene(string id, int sta, int end,string strand,string type,int transTab,string partial);
 	//void writeAllGenes(options* opts, string& NTs, string& AAs, bool doNT, bool doAA);
@@ -128,6 +139,8 @@ public:
 
 	list<int>& getSNPsPos() { return SNPsPos; }
 	list<float>& getSNPfreqs() { return SNPfreqs; }
+	void addDepth(int sta, int sto, int depth) { depthAccum += (long)(sto- sta) * depth; }
+	float getAvgDepth() { return (float)depthAccum / float(seq.length()); }
 
 
 private:
@@ -155,6 +168,7 @@ private:
 	vector<int> INDELpos;
 	list<float> INDELfreq;
 	vector<string> INDELref, INDELalt;
+	long depthAccum; //accumulated depth in the sequence, used for calculating average depth
 
 	// list of genes in the fasta file, from gff
 	geneCollection* geneCol;

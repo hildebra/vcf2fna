@@ -50,7 +50,7 @@ string combCommas(const vector<int>& vec) {
 
 
 bool isGZfile(std::string fi) {
-	if (fi.substr(fi.length() - 3) == ".gz") {
+	if (fi.length()>=3 && fi.substr(fi.length() - 3) == ".gz") {
 		return true;
 	}
 	return false;
@@ -98,23 +98,31 @@ ostream* writeGZUZ(const string& outF) {
 
 void helpMsg() {
 	cout << "basic usage: ./vcf2fasta -ref [ref.fasta[.gz]] -v [vcf[.gz]] -depthF [.bed[.gz]] -gff [.gff] -oCtg [fna]\n";
-	cout << "additional flags:\n";
-	cout << "  -minCallDepth [int] : minimum depth for a call to be considered\n";
-	cout << "  -minCallQual [int] : minimum quality for a call to be considered\n";
-	cout << "  -threads [int] : number of threads to use\n";
+	cout << "I/O flags:\n";
+	cout << "  -ref [file[.gz]] : reference assembly of metagenome\n";
+	cout << "  -v [file[.gz]] : vcf output from samtools mpileup or similar\n";
+	cout << "  -depthF [.bed[.gz]] : bed formatted depth of mapping to ref (can be created with e.g. samtools)\n";
+	cout << "  -gff [file[.gz]] : genes predicted on ref contigs. These will then be translated.\n";
 	cout << "  -tmp [dir] : temporary directory to use\n";
-	cout << "  -h, --help : print this help message\n";
-	cout << "  -v, --version : print version information\n";
-	cout << "  -gff [file] : gff file to use for annotation\n";
-	cout << "  -depthF [file] : depth file to use for annotation\n";
 	cout << "  -oCtg [file] : output file for consensus call corrected contigs \n";
 	cout << "  -oGeneNT [file] : output file for gene nucleotide sequences\n";
 	cout << "  -oGeneAA [file] : output file for gene amino acid sequences\n";
 	cout << "  -outType [CNA] : (C): print contigs (N): print genes on ctgs (A): print translated AA of genes\n";
 	cout << "  -keepEmptyCtgs : keep empty contigs in output\n";
 	cout << "  -keepEmptyGenes : keep empty genes in output\n";
+	cout << "SNP/SV call filtering:\n";
+	cout << "  -minCallDepth [int] : minimum depth for a call to be considered\n";
+	cout << "  -minCallQual [int] : minimum quality for a call to be considered\n";
 	cout << "  -seqPlatform [platform] : sequencing platform (ill, PB, ONT)\n";
+	cout << "  -minCallQualAdaptive[float] : filter SNPs < Depth * minCallQualAdaptive. Default: 0\n";
+	cout << "  -depthFilterScale [float] : if DP < mean contig depth *x, filter. Default: 0.25\n";
+	cout << "  -indelRange [int] : SNPs within X nucleotide range of an INDEL will be filtered\n";
 	cout << "  -skipINDELs : do not report INDELs in the output sequences\n";
+	cout << "  -minorAlleleNoMask : do not mask nucleotides with a minor allele (that passes filtering step)\n";
+	cout << "others:\n";
+	cout << "  -threads [int] : number of threads to use\n";
+	cout << "  -h, --help : print this help message\n";
+	cout << "  -v, --version : print version information\n";
 }
 
 void versionMsg() {
@@ -135,11 +143,13 @@ options::options(int argc, char** argv) :refFasta(""),
 outfna(""), outGeneNT(""), outGeneAA(""),
 tmp(""),inVCF(0), depthF(0), gffFile(""), outputTypes(""),
 seqPlatform(0),
-threads(1),
+threads(1), indelRange(5),
 minDepthPar(0), minCallQual(20),
 minFS(0.01), minMQ0F(0.6), minBQBZ(0.05), minSP(20),
 addHDTags(true), skipEmptyContigs(true), skipEmptyGenes(true),
-debug1(false), reportINDELs(true)
+debug1(false), reportINDELs(true), 
+maskMinorAllele(true), 
+minCallQualAdaptive(0.f), depthFilterScale(0.25f)
 {
 
 
@@ -159,6 +169,8 @@ debug1(false), reportINDELs(true)
 	}
 	for (int i = 1; i < argc; i++)
 	{
+		
+		
 		if (!strcmp(argv[i], "-ref")) {
 			refFasta = argv[++i];
 		} else if (!strcmp(argv[i], "-oCtg")) {
@@ -187,8 +199,21 @@ debug1(false), reportINDELs(true)
 			for (size_t i = 0; i < minDepthParT.size(); i++) {
 				minDepthPar[i] = atoi(minDepthParT[i].c_str());
 			}
-		} else if (!strcmp(argv[i], "-minCallQual")) {  // no swap
+		}
+		else if (!strcmp(argv[i], "-minCallQual")) {  // no swap
 			minCallQual = atoi(argv[++i]);
+		}
+		else if (!strcmp(argv[i], "-indelRange")) {  // no swap
+			indelRange = atoi(argv[++i]);
+			
+		} else if (!strcmp(argv[i], "-minFS")) {
+			minFS = stof(argv[++i]);
+		} else if (!strcmp(argv[i], "-minMQ0F")) {
+			minMQ0F = stof(argv[++i]);
+		} else if (!strcmp(argv[i], "-minBQBZ")) {
+			minBQBZ = stof(argv[++i]);
+		} else if (!strcmp(argv[i], "-minSP")) {
+			minSP = stof(argv[++i]);
 		}else if (!strcmp(argv[i], "-keepEmptyCtgs")) {
 			skipEmptyContigs = false;
 		}
@@ -198,6 +223,19 @@ debug1(false), reportINDELs(true)
 		else if (!strcmp(argv[i], "-skipINDELs")) {
 			reportINDELs = false;
 		}
+		else if (!strcmp(argv[i], "-minorAlleleNoMask")) {
+			maskMinorAllele = false;
+		}
+		else if (!strcmp(argv[i], "-minCallQualAdaptive")) {
+			minCallQualAdaptive = stof(argv[++i]);
+		}
+		else if (!strcmp(argv[i], "-depthFilterScale")) {
+			depthFilterScale = stof(argv[++i]);
+		}
+
+
+		
+
 		else if (!strcmp(argv[i], "-debug1")) {
 			debug1 = true;
 			cerr << "\n\nDEBUG1 active\n\n";
@@ -276,26 +314,24 @@ debug1(false), reportINDELs(true)
 void options::print_details() {
 
 	// print run mode:
-	cout << "ref assembly: " << refFasta << std::endl;
+	cout << "ref assembly, gff file: " << refFasta <<", "<< gffFile << std::endl;
+	cout << "seqPlatform:      " << combCommas(seqPlatform) << std::endl;
 	cout << "input vcf:    " << combCommas(inVCF) << std::endl;
 	cout << "depth file:   " << combCommas(depthF) << std::endl;
-	cout << "gff file:     " << gffFile << std::endl;
+	cout << "tmp dir:          " << tmp << std::endl;
 	cout << "output types: \"" << outputTypes << "\" ::";
 	cout << outfna << " " << outGeneNT << " " << outGeneAA << std::endl;
 	if (outfna.empty() && outGeneNT.empty() && outGeneAA.empty()){
 		cout << "  (no output files specified - theoretical statistics reported)" << std::endl;
 	}
-	cout << "tmp dir:          " << tmp << std::endl;
-	cout << "threads:          " << threads << std::endl;
-	cout << "minFS:            " << minFS << std::endl;
-	cout << "minMQ0F:          " << minMQ0F << std::endl;
-	cout << "minBQBZ:          " << minBQBZ << std::endl;
-	cout << "minSP:            " << minSP << std::endl;
-	cout << "skipEmptyContigs: " << skipEmptyContigs << std::endl;	
-	cout << "minCallDepth:     " << combCommas(minDepthPar) << std::endl;
-	cout << "minCallQual:      " << minCallQual << std::endl;
-	cout << "seqPlatform:      " << combCommas(seqPlatform) << std::endl;
-	cout << "reportINDELs:     " << reportINDELs << std::endl;
+	//cout << "threads:          " << threads << std::endl;
+	//cout << "minFS:            " << minFS << std::endl;
+	//cout << "minMQ0F:          " << minMQ0F << std::endl;
+	//cout << "minBQBZ:          " << minBQBZ << std::endl;
+	//cout << "minSP:            " << minSP << std::endl;
+	cout << "skipEmptyContigs, reportINDELs: " << skipEmptyContigs << ", " << reportINDELs << std::endl;
+	cout << "minCallDepth, minCallQual, maskMinorAllele:     " << combCommas(minDepthPar) << ", "<< minCallQual << ", " << maskMinorAllele<< std::endl;
+	cout << "depthFilterScale, minCallQualAdaptive:      " << depthFilterScale << ", " << minCallQualAdaptive << std::endl;
 	//cout << "threads:        " << threads << std::endl;
 	//cout << "mode:           " << mode  << std::endl;
 

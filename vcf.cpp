@@ -15,6 +15,8 @@ VCFReader::VCFReader(options* opt, refAssembly* R):
 
 
 	Vstats = new VariantStats();
+	filterStats = new VCFfilterStats();
+
 
 	// Open the VCF file
 
@@ -46,7 +48,9 @@ void VCFReader::read_vcf_file(istream* fp, int VCFnum, VCFcollection* Vcol) {
 	vcfFields* VF = new vcfFields(opts, VCFnum);
 	std::string line;
 	VCFmem* vcf2nd(nullptr);
-	bool DE1 = opts->debug1;
+
+	VCFmulti* collector = new VCFmulti();
+
 	while (getline(*fp, line)) {		
 		//std::cout << line << std::endl;;
 		if (line.empty()) continue;
@@ -73,11 +77,9 @@ void VCFReader::read_vcf_file(istream* fp, int VCFnum, VCFcollection* Vcol) {
 			}
 		} else {
 			lnCnt++;
-			if (DE1) { cerr << lnCnt << ":: " << line << endl; }
 			
 			//reading vcf entry..
-			VCFmem* vcf = new VCFmem(line,VF);
-			if (DE1) { cerr << "X"; }
+			VCFmem* vcf = new VCFmem(line,VF, filterStats);
 
 			if (Vcol != nullptr) {
 				Vcol->addVCF(vcf);
@@ -85,58 +87,41 @@ void VCFReader::read_vcf_file(istream* fp, int VCFnum, VCFcollection* Vcol) {
 			}
 			//take care of loading correct fasta..
 			if (vcf->getChrom() != curChrom) {
+
+				collector->evalVCFs(cF, VCF2ptr, Vstats, filterStats, opts);
+
 				curChrom = vcf->getChrom();
 				if (seenCtgs.find(curChrom) != seenCtgs.end()) {
 					throw std::runtime_error("Chromosome occurring multiple times. Is the vcf sorted?: " + curChrom);
-				}
-				else {
+				} else {
 					seenCtgs[curChrom] = 1;
 				}
 				cF = refG->getFasta(curChrom);
 			}
 
-			//check if double vcf entry exists for position..
-			if (VCF2ptr != nullptr) {
-				vcf2nd = VCF2ptr->recoverVCF(curChrom, vcf->getPos());
-				if (vcf2nd != nullptr) {//double vcf call!!
-					vcf->evalVCFentry(opts, VF, vcf2nd);
-				} else {//normal single vcf call..
-					vcf->evalVCFentry(opts, VF);
-				}
-			} else {//normal "single" vcf call
-				vcf->evalVCFentry(opts, VF);//eval if actual ntVariant/INDEL should be filtered or not
-			}
-			if (DE1) { cerr << "Y "; }
-			
-			
-			//now apply variant to contig
-			cF->ntVariant(vcf, Vstats);
+			collector->addVCFmem(vcf);
 
-			//collect stats for this vcf entry
-			collectVCFstats(vcf); 
-
-			delete vcf;
 		}
 	}
+	delete collector;
 	delete VF;
 	if (Vcol == nullptr) {
 		cout << endl << "Read " << cntAvContigs << " contigs and " << lnCnt << " entries from VCF file." << endl;
+		Vstats->printSNPstats();
+/*		cout << endl << "Read " << cntAvContigs << " contigs and " << lnCnt << " entries from VCF file." << endl;
 		cout << "  - Found " << Vstats->snpCNT << " SNPs and " << Vstats->indelCNT << " INDELS." << endl;
 		cout << "  - Filtered " << Vstats->snpFILT << ";" << Vstats->indelFILT << " entries (SNP; INDEL)." << endl;
 		cout << "  - Passed " << Vstats->SNPused << ";" << Vstats->indelUsed << " SNPs and INDELS. Conflicts resolved: "<< Vstats->conflictCnt << endl;
 		cout << "  - Unsure " << Vstats->unsrSNP << ";" << Vstats->unsrINDEL << " SNPs and INDELS replaced with N." << endl;
+		*/
 	}
 	else {
 		cout << "Read and stored " << Vcol->size() << " vcf entries\n";
 		cntAvContigs = 0; lnCnt = 0; //reset vars
 	}
+	filterStats->printStats();
 }
 
-void VCFReader::collectVCFstats(VCFmem* vcf)
-{
-
-	;//currently not used
-}
 
 /*
 minQual(opts->minCallQual), minDep(opts->minDepthPar),
@@ -144,76 +129,112 @@ minFS(opts->minFS), minMQ0F(opts->minMQ0F),
 minBQBZ(opts->minBQBZ), minSP(opts->minSP),
 */
 
-bool VCFmem::evalVCFentry(options* opts, vcfFields* VF) {
-	isFiltered = false; altFreq = 0.f;
+bool VCFmem::evalVCFentry(options* opts,  float mD, int lastIndelPos, int nextIndelPos) {
+	isFiltered = false; //altFreq = 0.f;
 	if (alt == "." || alt == "*" || alt == "<*>") { //nothing needed here...
 		isIndel = false; isSnp = false; isFiltered = false; return false;
 	}
-	if (VF->filter(fields) ) {
-		isFiltered = true;
-	}
+	//not used
+	//if (VF->filter(fields) ) {isFiltered = true;}
 	//filter2 based on the INFO field
-	if (SPval > (30.f + DPval / 2.f)) { isFiltered = true; } //minSP
-	if (abs(BQBZval) > (3.1f + DPval / 40.f)) { isFiltered = true; } //prev minBQBZ, now following htslib rec
 
 	//custom Filter
-	if (MQ0Fval > opts->minMQ0F) { isFiltered = true; }
-	if (FSval < opts->minFS) { isFiltered = true; }
+	if (MQ0Fval > opts->minMQ0F) { isFiltered = true; filterStats->MQ0Ffilt++; }
+	if (FSval < opts->minFS) { isFiltered = true; filterStats->FSfilt++; }
 
 
 	//assert(DP4[2] + DP4[3] + DP4[1] + DP4[0] == (int)DPval); //is actually not always the same..
 	//two ways of calculation altFreq
-	if (AF1val > 0.f) {
+	/*if (AF1val > 0.f) {
 		altFreq = AF1val;
 	}
 	else if ((DP4[2] + DP4[3] + DP4[1] + DP4[0]) > 0) {
 		altFreq = float(DP4[2] + DP4[3]) / float(DP4[2] + DP4[3] + DP4[1] + DP4[0]);
 	}
-	assert(altFreq > 0);
-
+	assert(altFreq >= 0);
+	*/
+	
 	if (isIndel) {
+		//******************************* INDEL
 		//https://www.htslib.org/workflow/filter.html
 		//DV < 2 ||     IMF < 0.02+(($qual+1)/($qual+31))*(($qual+1)/($qual+31))/4 || \
     DP > ($DP/2) * (1.7 + 12/($qual+20)) || MQBZ < -(5+DP/20) || RPBZ+SCBZ > 9"
-		if (IDVval < 2.f) { isFiltered = true;; }
+		if (IDVval < 2.f) { isFiltered = true;;		}
 		if (IMFval < 0.1f) { isFiltered = true;; } //skip indels with high IMF
 		if (RPBZval > 6.f || SCBZval > 6.f) { isFiltered = true;; } //skip indels with high RPBZ
 		if (RPBZval + SCBZval > 9.f) { isFiltered = true;; }
 		if (MQBZval < -(5.f + DPval / 20.f)) { isFiltered = true;; } //skip indels with high MQBZ
 		if (QUALval < opts->minCallQual) { isFiltered = true; }
-		if (!isFiltered) {
+		/*if (!isFiltered) {
 			int a = 0;//DEBUG
-		}
+		}*/
 	}
-	else {
-		assert(ref.length() == 1); assert(alt.length() == 1);
+	else if (ref.length() == 1 && alt.length() == 1) {
+		//******************************* SNP
+		//assert(ref.length() == 1); assert(alt.length() == 1);
 		isSnp = true;
+
+		//indel proximity filtering
+		if ( (posN - opts->indelRange < lastIndelPos && posN + opts->indelRange > lastIndelPos) ||
+			(posN - opts->indelRange < nextIndelPos && posN + opts->indelRange > nextIndelPos)){
+			isFiltered = true; filterStats->indelProx++;
+		}
+
+
+		//QUAL from SNP caller
+		
+		if (opts->minCallQualAdaptive>0.f && DPval > 2.f &&
+			QUALval < min(20.f,float(mD* opts->minCallQualAdaptive)) ) {
+			isFiltered = true; filterStats->QUALadaptive++; 
+		} 
+		if (DPval > 2.f &&  QUALval < (float)opts->minCallQual) {
+			isFiltered = true; filterStats->QUAL++; 
+		}
+		if (DPval < min(8.f,float(mD*opts->depthFilterScale))) { isFiltered = true; filterStats->DP++; }
+
+		//mean depth based filtering:
+/*		if (mD >= 20.f) {
+			//'QUAL<30 || DP<8 || MQ<40 || SB>40'
+			if ( DPval < 8.f) { isFiltered = true; filterStats->DP++; }
+
+		} else if (mD >= 5.f) {
+			//'QUAL<20 || DP<3 || MQ<40 || SB>40'
+			//if (opts->minCallQualAdaptive && QUALval < 10.f) { isFiltered = true; filterStats->QUALadaptive++; }
+			if (DPval < 3.f) { isFiltered = true; filterStats->DP++; }
+
+		}	else {
+			//'QUAL<20 || DP<2 || MQ<50 || SB>30'
+			//if (opts->minCallQualAdaptive && QUALval < 5.f) { isFiltered = true; filterStats->QUALadaptive++; }
+		}
+*/
+		//strand bias
+		if (SPval > (40.f + DPval / 2.f)) { isFiltered = true; filterStats->SP++;} //minSP
+		//SNP base quality
+		if (abs(BQBZval) > (3.1f + DPval / 40.f)) { isFiltered = true; filterStats->BQBZ++;} //prev minBQBZ, now following htslib rec
 
 		//ok this seems to be a ntVariant 
 		//bcftools rec filter: MQBZ < -3 || RPBZ < -3 || RPBZ > 3 || FORMAT/SP > 32 || SCBZ > 3
 		//or:
 		//DP>2*$DP || MQBZ < -(3.5+4*DP/QUAL) || RPBZ > (3+3*DP/QUAL) || RPBZ < -(3+3*DP/QUAL) || FORMAT/SP > (40+DP/2) || SCBZ > (2.5+DP/30)
-		if (MQBZval < -3.f) { isFiltered = true;; } //skip snps with high MQBZ
-		if (abs(RPBZval) > 3.5f) { isFiltered = true;; } //skip snps with high RPBZ
-		if (SCBZval > 2.f + DPval / 30.f) { isFiltered = true;; } //skip snps with high SCBZ
-		if (QUALval < opts->minCallQual) { isFiltered = true; }
-
+		if (MQBZval < -3.f) { isFiltered = true;; filterStats->MQBZ++;} //skip snps with high MQBZ
+		//position in read
+		if (abs(RPBZval) > 3.5f) { isFiltered = true;; filterStats->RPBZ++;} //skip snps with high RPBZ
+		//soft clips
+		if (SCBZval > 2.f + DPval / 30.f) { isFiltered = true;; filterStats->SCBZ++;} //skip snps with high SCBZ
 	}
 	return !isFiltered;
 }
 
-bool VCFmem::evalVCFentry(options* opts, vcfFields* VF, VCFmem* v2) {
+bool VCFmem::evalVCFentry(options* opts,  VCFmem* v2, float mD, int lastIndelPos, int nextIndelPos) {
 	//in this case the current vcf is converted to a "combined" vcf entry..
-	isFiltered = false; altFreq = 0.f;
+	isFiltered = false; //altFreq = 0.f;
 	bool isF2 = false;//for second read to later decide whom to trust..
 	if ((alt == "." || alt == "*" || alt == "<*>") && 
 			(v2->alt == "." || v2->alt == "*" || v2->alt == "<*>")) { //nothing needed here...
 		isIndel = false; isSnp = false; isFiltered = false; return false;
 	}
 
-	if (VF->filter(fields) && VF->filter(v2->fields)) {
-		isFiltered = true;
-	}
+	//if (VF->filter(fields) && VF->filter(v2->fields)) {isFiltered = true;}
 	//combine relevant entries
 	//DPval += v2->DPval;
 	//SPval = (SPval + v2->SPval) / 2;
@@ -221,8 +242,7 @@ bool VCFmem::evalVCFentry(options* opts, vcfFields* VF, VCFmem* v2) {
 
 	//filter2 based on the INFO field
 	//strand bias
-	if (SPval > (30.f + DPval / 2.f)) { isFiltered = true; } //minSP
-	if (v2->SPval > (30.f + v2->DPval / 2.f)) { isF2 = true; } //minSP
+	
 	if (abs(BQBZval) > (3.1f + DPval / 40.f)) { isFiltered = true; } //prev minBQBZ, now following htslib rec
 	if (abs(v2->BQBZval) > (3.1f + v2->DPval / 40.f)) { isF2 = true; } //prev minBQBZ, now following htslib rec
 
@@ -235,15 +255,19 @@ bool VCFmem::evalVCFentry(options* opts, vcfFields* VF, VCFmem* v2) {
 
 	//assert(DP4[2] + DP4[3] + DP4[1] + DP4[0] == (int)DPval); //is actually not always the same..
 	//two ways of calculation altFreq
-	if (AF1val > 0.f) {
+	/*if (AF1val > 0.f) {
 		altFreq = AF1val;
 	} else if ((DP4[2] + DP4[3] + DP4[1] + DP4[0]) > 0) {
 		altFreq = float(DP4[2] + DP4[3]) / float(DP4[2] + DP4[3] + DP4[1] + DP4[0]);
 	}
-	assert(altFreq > 0);
+	assert(altFreq >= 0);
+	*/
 
 	//combine freqs
-	float cFreq((AF1val * DPval + v2->AF1val * v2->DPval) / (v2->DPval + DPval));
+    float cFreq(0.f);
+	if ((v2->DPval + DPval) > 0.f) {
+		cFreq = (AF1val * DPval + v2->AF1val * v2->DPval) / (v2->DPval + DPval);
+		}
 	float cFreq2(float(DP4[2] + DP4[3]+ v2->DP4[2] + v2->DP4[3]) / float(DP4[2] + DP4[3] + DP4[1] + DP4[0] + v2->DP4[2] + v2->DP4[3] + v2->DP4[1] + v2->DP4[0]));
 
 
@@ -258,9 +282,11 @@ bool VCFmem::evalVCFentry(options* opts, vcfFields* VF, VCFmem* v2) {
 		if (MQBZval < -(5.f + DPval / 20.f)) { isFiltered = true;; } //skip indels with high MQBZ
 		if (QUALval < opts->minCallQual) { isFiltered = true; }
 	}
-	else {
-		assert(ref.length() == 1); assert(alt.length() == 1);
+	else if (ref.length() == 1 && alt.length() == 1){
+		//assert(ref.length() == 1); assert(alt.length() == 1);
 		isSnp = true;
+		if (SPval > (40.f + DPval / 2.f)) { isFiltered = true; } //minSP
+		if (v2->SPval > (40.f + v2->DPval / 2.f)) { isF2 = true; } //minSP
 
 		//ok this seems to be a ntVariant 
 		//bcftools rec filter: MQBZ < -3 || RPBZ < -3 || RPBZ > 3 || FORMAT/SP > 32 || SCBZ > 3
@@ -273,7 +299,7 @@ bool VCFmem::evalVCFentry(options* opts, vcfFields* VF, VCFmem* v2) {
 
 		if (v2->MQBZval < -3.f) { isF2 = true; } //skip snps with high MQBZ
 		if (abs(v2->RPBZval) > 3.5f) { isF2 = true; } //skip snps with high RPBZ
-		if (v2->SCBZval > 2.f + DPval / 30.f) { isF2 = true;; } //skip snps with high SCBZ
+		if (v2->SCBZval > 2.f + v2->DPval / 30.f) { isF2 = true;; } //skip snps with high SCBZ
 		if (v2->QUALval < opts->minCallQual) { isF2 = true; }
 
 	}
@@ -285,7 +311,7 @@ bool VCFmem::evalVCFentry(options* opts, vcfFields* VF, VCFmem* v2) {
 		if (alt != v2->alt) {
 			//transfer values
 			alt = v2->alt; altFreq = v2->altFreq; conflict = true;
-		}else {//trust because it is the same alt allele
+		}else {//trust because it iof ths the same alt allele
 			isFiltered = false; altFreq = cFreq;
 		}
 	} else if (isF2 && !isFiltered) {//1st stronger (could be ill)
@@ -305,7 +331,7 @@ bool VCFmem::evalVCFentry(options* opts, vcfFields* VF, VCFmem* v2) {
 	return !isFiltered;
 }
 
-VCFmem::VCFmem(const string& line, vcfFields* VF):
+VCFmem::VCFmem(const string& line, vcfFields* VF, VCFfilterStats*FS):
 	chrom(""), id(""), ref(""), alt(""), filter(""),
 	fieldsSet(false), QUALval(0.f),
 	fields(0), DP4(4),
@@ -313,7 +339,7 @@ VCFmem::VCFmem(const string& line, vcfFields* VF):
 	IDVval(10.f), IMFval(10.f),
 	isIndel(false), isSnp(false),
 	isFiltered(false), isUnsure(false),
-	conflict(false)
+	conflict(false), filterStats(FS)
 
 {
 	// Parse a single VCF line
@@ -325,7 +351,7 @@ VCFmem::VCFmem(const string& line, vcfFields* VF):
 	string info, format, xtra;
 	//first check if the filter is set to "PASS" or not, if not, skip this line
 	ss >> filter >> info >> format >> xtra;
-	if (info.substr(0, 5) == "INDEL") {
+	if (info.substr(0, 5) == "INDEL" || alt.length()!=1 || ref.length()!=1 || alt == "<DEL>" || alt == "<INS>") {
 		isIndel = true;// indelCNT++;
 	}
 	//cerr << "U"; 
@@ -333,7 +359,18 @@ VCFmem::VCFmem(const string& line, vcfFields* VF):
 	//cerr << "I"; 
 	this->splitXtra(xtra,VF);
 	//cerr << "O"; 
-	this->parseINFO(info);
+    this->parseINFO(info);
+	// compute initial alt frequency so stored VCF entries have a usable value
+	altFreq = 0.f;
+	int sumDP4 = DP4[0] + DP4[1] + DP4[2] + DP4[3];
+	if (sumDP4 > 0) {
+		altFreq = float(DP4[2] + DP4[3]) / float(sumDP4);
+	}else if (AF1val >= 0.f) {
+		altFreq = AF1val;
+	} else {
+		altFreq = 0.f;
+	}
+
 	//cerr << "P"; 
 
 	return;
@@ -460,6 +497,62 @@ VCFmem* VCFcollection::recoverVCF(const string& cont, int pos) {
 	return(posSrch->second);
 }
 
+void VCFmulti::evalVCFs(fasta* cF, VCFcollection* VCF2ptr, 
+	VariantStats* Vstats, VCFfilterStats* filterStats,options* opts) {
+	if (cF == nullptr) { return; }
+	float meanDepth(0.f);
+	meanDepth = cF->getAvgDepth();
+	string curChrom = cF->getHeader();
+	//check if double vcf entry exists for position..
+
+	std::list<VCFmem*>::iterator it;
+
+	//first: determine indels
+	vector<int> indelPos;
+	for (auto const& v : mems) {
+		if (v->isINDEL()) {
+			indelPos.push_back(v->getPos());
+		}
+	}
+	//now sort indelPos vector and remove duplicates
+	std::sort(indelPos.begin(), indelPos.end());
+	int indelIdx(0);
+	int lastIndelPos(0), nextIndelPos(0);
+	if (indelPos.size() > 0 ) {
+		lastIndelPos = nextIndelPos=indelPos[0];
+	} 
+
+	for (auto const& v : mems) {
+		VCFmem* vcf = v;
+		if (indelIdx< indelPos.size()){
+			if (vcf->getPos() > indelPos[indelIdx]) {
+				lastIndelPos = indelPos[indelIdx];
+				indelIdx++;
+				if (indelIdx < indelPos.size()) {
+					nextIndelPos = indelPos[indelIdx];
+				}
+			}
+		}
+		if (VCF2ptr != nullptr) {
+			VCFmem* vcf2nd = VCF2ptr->recoverVCF(curChrom, vcf->getPos());
+			if (vcf2nd != nullptr) {//double vcf call!!
+				vcf->evalVCFentry(opts,  vcf2nd, meanDepth, lastIndelPos, nextIndelPos);
+			}
+			else {//normal single vcf call..
+				vcf->evalVCFentry(opts, meanDepth, lastIndelPos, nextIndelPos);
+			}
+		}
+		else {//normal "single" vcf call
+			vcf->evalVCFentry(opts,  meanDepth, lastIndelPos, nextIndelPos);//eval if actual ntVariant/INDEL should be filtered or not
+		}
+		//now apply variant to contig // 
+		cF->ntVariant(vcf, Vstats, filterStats, opts);
+		delete vcf;
+
+	}
+	mems.clear();
+}
+
 
 void VCFcollection::addVCF(VCFmem* vv) {
 	const string cont = vv->getChrom();
@@ -499,8 +592,15 @@ void VCFcollection::addVCF(VCFmem* vv) {
 }
 
 VCFcollection::~VCFcollection() {
-	for (auto it : VMems) {
-		delete it.second;
+    for (auto it : VMems) {
+		// delete stored VCFmem pointers inside each map
+		map2vcfm* m = it.second;
+		if (m) {
+			for (auto &p : *m) {
+				if (p.second) delete p.second;
+			}
+			delete m;
+		}
 	}
 }
 

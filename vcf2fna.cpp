@@ -12,7 +12,9 @@ void startMsg() {
 int main(int argc, char* argv[])
 {
 
-if (argc < 2) { cerr << "Not enough arguments. Use \"vcf2fna -h\" for getting started.\n"; exit(3); }
+if (argc < 2) { 
+	cerr << "Not enough arguments. Use \"vcf2fna -h\" for getting started.\n"; exit(3); 
+}
 
 ini_AA();
 
