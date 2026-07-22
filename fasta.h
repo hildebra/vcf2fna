@@ -1,6 +1,7 @@
 #pragma once
 
 #include "options.h"
+#include <cstdint>
 
 
 
@@ -10,27 +11,30 @@ using namespace std;
 class VCFmem; // forward declaration
 class fasta; // forward declaration
 class VCFfilterStats; // forward declaration
-void ini_AA();
 
 
 struct VariantStats {
-	int snpCNT, indelCNT, snpFILT, indelFILT, unsrSNP, 
+	int64_t snpCNT, indelCNT, snpFILT, indelFILT, unsrSNP,
 		unsrINDEL, indelUsed, SNPused, conflictCnt,
-		majorAllele, majorAlleleFilt, minorAllele, minorAlleleFilt;
+		majorAllele, majorAlleleFilt, minorAllele, minorAlleleFilt,
+		SNPlowCov, refMismatch;
 	VariantStats() :snpCNT(0), indelCNT(0), snpFILT(0), indelFILT(0), unsrSNP(0), 
 		unsrINDEL(0), indelUsed(0), SNPused(0), conflictCnt(0),
-		majorAllele(0), majorAlleleFilt(0), minorAllele(0), minorAlleleFilt(0){}
+		majorAllele(0), majorAlleleFilt(0), minorAllele(0), minorAlleleFilt(0),
+		SNPlowCov(0), refMismatch(0){}
 	void printSNPstats() {
 		cout << "SNP stats: " << endl;
 		cout << "  - Found " << snpCNT << " SNPs and " << indelCNT << " INDELS." << endl;
 		cout << "  - Filtered " << majorAlleleFilt << ", "<< minorAlleleFilt << "; " << indelFILT << " entries (major, minor SNP; INDEL)." << endl;
 		cout << "  - Passing Filters: " << majorAllele << ", " << minorAllele << "; " << indelUsed << " entries (major, minor SNPs; INDELS). Conflicts resolved: " << conflictCnt << endl;
 		cout << "  - Unsure: " << unsrSNP << ";" << unsrINDEL << " (SNPs; INDELS - replaced with N)" << endl;
+		cout << "  - low Coverage: " << SNPlowCov << endl;
+		cout << "  - Reference/coordinate mismatches skipped: " << refMismatch << endl;
 	}
 };
 
 struct OutputStats {
-	int totalContigs, totalCtgNTs, totalGenes, totalGeneNTs, totalGeneAAs;
+	int64_t totalContigs, totalCtgNTs, totalGenes, totalGeneNTs, totalGeneAAs;
 	OutputStats() :totalContigs(0), totalCtgNTs(0), totalGenes(0), totalGeneNTs(0), totalGeneAAs(0) {}
 	void printStats() {
 		cout << "In total, wrote " << totalContigs << " contigs with "<< totalCtgNTs<< " valid NTs, ";
@@ -44,18 +48,22 @@ class gene
 {
 public:
 	gene() : geneID(""), geneStart(0), geneEnd(0), 
-			geneLength(0), geneStrand(true), numOnContig(-1), accumDepth(0){}
+			geneLength(0), depthReferenceLength(0), geneStrand(true), translationTable(11), phase(0),
+			numOnContig(-1), accumDepth(0){}
 	gene(string id, int sta, int end);// : geneID(id), geneStart(sta), geneEnd(end), geneLength(end - sta), geneStrand(true), numOnContig(-1) {}
 	gene(gene* GG);
 	~gene() {}
 	void setStrand(string s) { if (s == "-") geneStrand = false; else geneStrand = true; }
 	void setType(string t) { type = t; }
 	void setTranslationTable(int t) { translationTable = t; }
+	void setPhase(int p) { phase = p; }
+	void setSegments(const vector<pair<int, int> >& s);
 	void setNumOnContig(int n) { numOnContig = n; }
 	void setPartial(string p) { partial = p; }
 
-	void addAccumDepth(int d) { accumDepth += d; }
-	float getAvgDepth() { return (float)accumDepth / geneLength; }
+	void addAccumDepth(int64_t d) { accumDepth += d; }
+	float getAvgDepth() { return depthReferenceLength > 0 ?
+		static_cast<float>(accumDepth) / static_cast<float>(depthReferenceLength) : 0.f; }
 
 	string geneNT(const string& seq);
 	string geneAA(const string& seq);
@@ -68,15 +76,21 @@ private:
 	int geneStart;	// start position of the gene
 	int geneEnd;	// end position of the gene
 	int geneLength;	// length of the gene
+	int depthReferenceLength; // original annotated length represented by accumDepth
+	vector<pair<int, int> > segments; // zero-based, inclusive genomic CDS intervals
 	bool geneStrand;	// strand of the gene: + = true, - = false
 	string type;	// type of the gene: CDS, gene, exon, intron, pseudogene, ncRNA_gene, tRNA, rRNA, miRNA, mRNA, etc.
 	int translationTable;	// translation table for the gene
+	int phase; // GFF3 phase: bases before the first complete codon in the oriented CDS
 	int numOnContig;	// number of genes on the contig
-	string partial;	// partial gene: 00:no, 01:5', 10:3', 11:both
-	int accumDepth; //accumulated depth in the gene, used for calculating average depth
+	string partial;	// partial at left/right genomic boundaries (Prodigal partial=XY semantics)
+	int64_t accumDepth; // accumulated depth in the gene, used for calculating average depth
 
 	//functions
 	void reverseComplement( string& seq);
+	void recalculateGeometry();
+	bool fivePrimePartial() const;
+	int positionOffset(int genomicPos) const;
 
 	friend class geneCollection;
 };
@@ -94,7 +108,7 @@ public:
 		bool doAA, fasta* fa, OutputStats* Ostats);
 	size_t size() { return genes.size(); }
 	void push_back(gene* g) { genes.push_back(g); }
-	void correctCoords(int pos, int altL, int refL);
+	void correctCoords(int pos, const string& ref, const string& alt);
 	void prepMuts();
 	void depthInGenes(int sta, int sto, int depth);
 private:
@@ -109,29 +123,26 @@ private:
 class fasta
 {
 public:
-	fasta(string s, string h) :seq(s), mutSeq(""),mutSeqDone(false),
-		header(h), seqUse(s.length(), false), length(s.length()),
-		SNPsCnt(0), UnctCnt(0),  SNPsPos(0), SNPfreqs(0),conflictCnt(0),
-		INDELcnt(0),INDELpos(0),INDELfreq(0), depthAccum(0), geneCol(nullptr)
-	{
-		geneCol = new geneCollection();
-	}
+	fasta(string s, string h);
 	~fasta() { delete geneCol; }
 //functions
 	string getSeq() const { return seq; }
 	string getHeader() const { return header; }
+	string getSequenceId() const { return sequenceId; }
 	int getLength() const { return (int)seq.length(); }
 	void setSeq(string s) { seq = s; }
-	void resetCnts() { length = seq.length(); }
+	bool validateVariantReference(VCFmem* vx, VariantStats* stats, const options* opts) const;
 	void ntVariant(VCFmem* vx, VariantStats* Vstats, VCFfilterStats*,options*);
 	string write(options* opts, OutputStats* Ostats);
-	void addGene(string id, int sta, int end,string strand,string type,int transTab,string partial);
+	void addGene(string id, int sta, int end,string strand,string type,int transTab,
+		string partial, int phase = 0, const vector<pair<int, int> >& segments = vector<pair<int, int> >());
 	//void writeAllGenes(options* opts, string& NTs, string& AAs, bool doNT, bool doAA);
 	int maskSeq(int start, int end, bool repl=false);
 	int unmaskSeq(int start, int end);
-	long getSNPcount() { return SNPsCnt; }
-	long getNonNcount() { return length - getNumNs(); }
+	int64_t getSNPcount() { return SNPsCnt; }
+	int64_t getNonNcount(options* opts);
 	void writeAllGenes(options* opts, string& NTs, string& AAs, bool doNT, bool doAA, OutputStats* Ostats) {
+		prepMuts();
 		geneCol->writeAllGenes(opts, NTs, AAs, doNT, doAA, this, Ostats);
 	}
 	void prepMuts() { geneCol->prepMuts();  }
@@ -139,36 +150,44 @@ public:
 
 	list<int>& getSNPsPos() { return SNPsPos; }
 	list<float>& getSNPfreqs() { return SNPfreqs; }
-	void addDepth(int sta, int sto, int depth) { depthAccum += (long)(sto- sta) * depth; }
-	float getAvgDepth() { return (float)depthAccum / float(seq.length()); }
+	void addDepth(int sta, int sto, int depth, size_t source);
+	bool isDepthResolved(int pos) const {
+		return pos >= 0 && static_cast<size_t>(pos) < seqUse.size() &&
+			seqUse[static_cast<size_t>(pos)];
+	}
+	float getAvgDepth() { return seq.empty() ? 0.f : static_cast<float>(depthAccum) / static_cast<float>(seq.length()); }
+	float getAvgDepth(size_t source) const {
+		return seq.empty() || source >= depthAccumBySource.size() ? 0.f :
+			static_cast<float>(depthAccumBySource[source]) / static_cast<float>(seq.length());
+	}
 
 
 private:
 	//functions
 	void SNP(int pos, string r, string a, float freq);
 	void INDEL(int pos, string r, string a, float freq);
-	string getMutatedHeader(bool);
-	//int getNumNs() { return count(seq.begin(), seq.end(), 'N'); }
-	int getNumNs() { return count(seqUse.begin(), seqUse.end(), false); }
+	void maskUncertainSpan(int pos, size_t refLength);
+	string getMutatedHeader(bool, const string& renderedSeq);
+	bool referenceAlleleMatches(int pos, const string& ref, string& reason) const;
 	string getMutatedSeq(options* opts);
 
 
 	//variables
 	string seq, mutSeq;
 	bool mutSeqDone;
-	string header;
-	vector<bool> seqUse; //use this position? true = use, false = mask with N
-	int length;
+	string header, sequenceId;
+	vector<bool> seqUse; // depth-resolution mask: true = emit the base, false = emit N
 	//stats
-	int SNPsCnt, UnctCnt;
+	int64_t SNPsCnt, UnctCnt;
 	list<int> SNPsPos;
 	list<float> SNPfreqs;
-	int conflictCnt;
-	int INDELcnt;
+	int64_t conflictCnt;
+	int64_t INDELcnt;
 	vector<int> INDELpos;
 	list<float> INDELfreq;
 	vector<string> INDELref, INDELalt;
-	long depthAccum; //accumulated depth in the sequence, used for calculating average depth
+	int64_t depthAccum; // accumulated depth in the sequence, used for calculating average depth
+	vector<int64_t> depthAccumBySource; // per depth/VCF source; seqUse remains their union
 
 	// list of genes in the fasta file, from gff
 	geneCollection* geneCol;
@@ -198,7 +217,7 @@ private:
 //functions
 	void writeContigs(OutputStats* Ostats);
 	void writeGenes(OutputStats* Ostats);
-	void processDepth(const string&, int minDepth);
+	void processDepth(const string&, int minDepth, size_t source);
 
 
 
@@ -213,9 +232,5 @@ private:
 	//void readFastaFile(FILE* fp);
 	robin_hood::unordered_map  <string, int> hd2ID;
 	options* opts;
-
-
-	//functions
-	int replaceWithNs(std::string& seq, const int start, const int end, char replaceWith = 'N');
 
 };

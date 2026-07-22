@@ -11,43 +11,29 @@ void startMsg() {
 
 int main(int argc, char* argv[])
 {
+	try {
+		if (argc < 2) {
+			cerr << "Not enough arguments. Use \"vcf2fna -h\" for getting started.\n";
+			return 3;
+		}
 
-if (argc < 2) { 
-	cerr << "Not enough arguments. Use \"vcf2fna -h\" for getting started.\n"; exit(3); 
-}
+		Benchmark bench("Time vcf2fasta ");
+		bench.start();
+		options opts(argc, argv);
+		refAssembly refFA(&opts);
+		refFA.readGFF();
+		refFA.readDepth();
+		bench.now_total_time();
 
-ini_AA();
+		VCFReader vcf(&opts, &refFA);
+		bench.now_total_time();
+		refFA.writeOutputs();
 
-//clock_t tStart = clock();
-Benchmark* bench = new Benchmark("Time vcf2fasta ");
-bench->start();
-
-//1 read command line arguments
-options* opts = new options(argc, argv);
-
-
-//2 read_vcf_file reference genome
-refAssembly* refFA = new refAssembly(opts);
-refFA->readGFF();
-refFA->readDepth();
-bench->now_total_time();
-
-
-//3 go though the VCF file, reconstruct fasta sequences
-VCFReader* vcf = new VCFReader(opts, refFA);
-bench->now_total_time();
-
-//writes requested contigs, genes (NT) and genes (AA)
-refFA->writeOutputs();
-
-//cleanup
-delete vcf;
-delete refFA;
-delete opts;
-
-
-bench->stop();
-bench->printResults();
-delete bench;
-
+		bench.stop();
+		bench.printResults();
+		return 0;
+	} catch (const std::exception& error) {
+		cerr << "vcf2fna: " << error.what() << '\n';
+		return 1;
+	}
 }
