@@ -33,6 +33,7 @@
 
 
 void helpMsg();
+void limitedWarning(const std::string& category, const std::string& message);
 
 
 
@@ -41,11 +42,12 @@ void helpMsg();
 #endif
 #define notRpackage
 
-// gzstream is an optional, externally supplied dependency.  Defining
-// VCF2FNA_USE_GZSTREAM enables transparent .gz input/output; builds without
-// that dependency remain portable and report a clear error for .gz paths.
-#ifdef VCF2FNA_USE_GZSTREAM
-#include "gzstream.h"
+// Linux builds automatically enable the bundled zlib-backed gzip streams.
+// Other systems can opt in with VCF2FNA_USE_GZSTREAM; Linux can explicitly
+// opt out with VCF2FNA_DISABLE_GZIP when zlib development files are unavailable.
+#if !defined(VCF2FNA_DISABLE_GZIP) && \
+	(defined(__linux__) || defined(VCF2FNA_USE_GZSTREAM))
+#include "include/gzstream.h"
 #define VCF2FNA_HAS_GZIP 1
 #endif
 
@@ -71,7 +73,9 @@ typedef unsigned long ulong;
 //0.31: 6.3.26: high freq SNP acceptance, masking only for depth
 //0.32: 6.3.26: multi-allelic integration
 //0.40: 21.7.26: correctness, VCF/GFF validation, bacterial translation, and CLI hardening
-const string vcf2fnaVERSION = "0.40";
+//0.41: 22.7.26: automatically enable bundled zlib gzip streams on Linux
+//0.42: 23.7.26: robust VCF floats, bounded warnings, and reference-neutral metagenomic defaults
+const string vcf2fnaVERSION = "0.42";
 
 
 
@@ -132,7 +136,7 @@ public:
 	bool maskMinorAllele;
 	float minCallQualAdaptive;//if >0, adds a mean-depth-scaled QUAL threshold
 	float depthFilterScale; // if DP < mean contig depth *x, filter. Default: 0.25
-	float maxDepthFilterScale; // if DP > mean contig depth *x, filter. 0 disables. Default: 3
+	float maxDepthFilterScale; // if DP > mean contig depth *x, filter. 0 disables. Default: 0
 
 };
 

@@ -1,6 +1,7 @@
 #include "vcf.h"
 
 #include <cctype>
+#include <cstdlib>
 #include <cmath>
 #include <limits>
 #include <map>
@@ -26,13 +27,19 @@ string lowerCopy(string value) {
 
 bool parseFloatValue(const string& text, float& value) {
 	if (text.empty() || text == ".") return false;
-	size_t used = 0;
-	try {
-		value = stof(text, &used);
-	} catch (const std::exception&) {
+	char* end = nullptr;
+	const double parsed = std::strtod(text.c_str(), &end);
+	if (end == text.c_str() || end == nullptr || *end != '\0' ||
+		!std::isfinite(parsed) ||
+		parsed > static_cast<double>(std::numeric_limits<float>::max()) ||
+		parsed < -static_cast<double>(std::numeric_limits<float>::max())) {
 		return false;
 	}
-	return used == text.size() && std::isfinite(value);
+	// strtof/std::stof may report a valid subnormal value as ERANGE. Parse as
+	// double and narrow deliberately so tiny VCF values (for example FS
+	// p-values around 1e-41) remain valid; values below float range become zero.
+	value = static_cast<float>(parsed);
+	return true;
 }
 
 bool parseIntValue(const string& text, int& value) {
@@ -124,7 +131,8 @@ void VCFReader::read_vcf_file(istream* fp, int VCFnum, VCFcollection* Vcol) {
 					cntAvContigs++;//
 					
 					if (!tmpContig.empty() && !refG->isSequence(tmpContig)) {
-						cerr << "Warning: contig " << tmpContig << " not found in reference assembly." << endl;
+						limitedWarning("VCF contig absent from reference",
+							"contig " + tmpContig + " not found in reference assembly.");
 					}
 				}
 				//meta.push_back(line);
@@ -1425,9 +1433,10 @@ void VCFmulti::evalVCFs(fasta* cF, VCFcollection* VCF2ptr,
 		representative->isFiltered = false;
 		representative->conflictSpan = static_cast<size_t>(activeEnd - activeStart);
 		suppressed[i] = true;
-		cerr << "Warning: overlapping sequence replacements on " << representative->getChrom()
-			<< " near one-based position " << (activeStart + 1)
-			<< "; masking their combined reference span" << endl;
+		limitedWarning("overlapping sequence replacements",
+			"overlapping sequence replacements on " + representative->getChrom() +
+			" near one-based position " + to_string(activeStart + 1) +
+			"; masking their combined reference span");
 	}
 
 	for (size_t i = 0; i < evaluatedResults.size(); ++i) {

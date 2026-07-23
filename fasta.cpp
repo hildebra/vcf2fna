@@ -465,9 +465,10 @@ bool fasta::validateVariantReference(VCFmem* vx, VariantStats* stats, const opti
 	if (referenceAlleleMatches(vx->getPos(), vx->getRef(), mismatchReason)) return true;
 
 	++stats->refMismatch;
-	cerr << "Warning: skipping variant on " << sequenceId << " at one-based position "
-		<< (vx->getPos() + 1) << ": " << mismatchReason << " (mismatch "
-		<< stats->refMismatch << "/" << opts->maxRefMismatches << ")" << endl;
+	limitedWarning("reference/VCF mismatch",
+		"skipping variant on " + sequenceId + " at one-based position " +
+		to_string(vx->getPos() + 1) + ": " + mismatchReason + " (mismatch " +
+		to_string(stats->refMismatch) + "/" + to_string(opts->maxRefMismatches) + ")");
 	if (stats->refMismatch > opts->maxRefMismatches) {
 		throw std::runtime_error("Reference/VCF mismatch limit exceeded (" +
 			to_string(stats->refMismatch) + " > " + to_string(opts->maxRefMismatches) +
@@ -730,7 +731,9 @@ string fasta::getMutatedSeq(options* opts) {
 			continue; //skip uncertain indels
 		}
 		if ((!alt.empty() && alt.front() == '<') || alt == "*") {
-			cerr << "symbolic indels found:" << alt << " at position " << pos << ". Skipping these variants." << endl;
+			limitedWarning("symbolic indel",
+				"symbolic indel " + alt + " at position " + to_string(pos) +
+				"; skipping this variant");
 			continue; //skip symbolic indels
 		}
 		if (pos < 0 || static_cast<size_t>(pos) > mutSeq.length() ||

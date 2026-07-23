@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.42 - 2026-07-23
+
+- Accepted valid subnormal scientific-notation values in VCF numeric fields,
+  including extremely small `FS` and `PV4`-style p-values.
+- Limited repeated warnings to five examples per category, followed by one
+  suppression notice, without weakening mismatch counting or abort limits.
+- Disabled relative high-depth filtering by default. Metagenomic coverage is
+  intrinsically uneven, so passing major ALT alleles now replace de novo
+  assembly bases unless an explicit high-depth scale or another evidence filter
+  rejects them.
+
+## 0.41 - 2026-07-22
+
+- Re-enabled automatic gzip input/output for Linux builds using a bundled
+  zlib-backed C++ stream and Linux-aware Makefile/test compilation.
+- Retained explicit opt-in support on other operating systems and an explicit
+  `VCF2FNA_DISABLE_GZIP` escape hatch for Linux builds without zlib.
+
 ## 0.40 - 2026-07-21
 
 - Fixed final-contig variant flushing, sequence-replacement coordinates,

@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <limits>
 #include <set>
+#include <unordered_map>
 
 namespace {
 
@@ -108,6 +109,19 @@ string normalizedPathKey(const string& value) {
 
 } // namespace
 
+void limitedWarning(const string& category, const string& message) {
+	static std::unordered_map<string, size_t> warningCounts;
+	constexpr size_t displayLimit = 5;
+	size_t& count = warningCounts[category];
+	++count;
+	if (count <= displayLimit) {
+		cerr << "Warning: " << message << '\n';
+	} else if (count == displayLimit + 1) {
+		cerr << "Info: further warnings of type '" << category
+			 << "' will not be shown.\n";
+	}
+}
+
 
 
 
@@ -177,9 +191,9 @@ istream* openGZUZ(const string& inF) {
 	#ifdef VCF2FNA_HAS_GZIP
 		in.reset(new igzstream(inF.c_str(), ios::in));
 		//cout << "Straming gzip input on the fly\n";
-#else
+	#else
 		throw std::runtime_error(
-			"gzip input is not enabled in this build (rebuild with VCF2FNA_USE_GZSTREAM): " + inF);
+			"gzip input is not enabled in this build (automatic on Linux; otherwise build with VCF2FNA_USE_GZSTREAM): " + inF);
 #endif
 	}
 	else { 
@@ -198,9 +212,9 @@ ostream* writeGZUZ(const string& outF) {
 	#ifdef VCF2FNA_HAS_GZIP
 		out.reset(new ogzstream(outF.c_str(), ios::out));
 		//cout << "Writing gzip'd matrix " << outF << endl;
-#else
+	#else
 		throw std::runtime_error(
-			"gzip output is not enabled in this build (rebuild with VCF2FNA_USE_GZSTREAM): " + outF);
+			"gzip output is not enabled in this build (automatic on Linux; otherwise build with VCF2FNA_USE_GZSTREAM): " + outF);
 #endif
 	}
 	else { out.reset(new ofstream(outF)); }
@@ -231,7 +245,7 @@ void helpMsg() {
 	cout << "                            (inferred from supplied output filenames by default)\n";
 	cout << "  -keepEmptyCtgs            retain contigs with no resolvable sequence\n";
 	cout << "  -keepEmptyGenes           retain genes with no resolvable sequence\n";
-	cout << "  .gz paths require a build compiled with VCF2FNA_USE_GZSTREAM.\n\n";
+	cout << "  .gz input/output is enabled automatically by Linux builds (zlib required).\n\n";
 	cout << "Call and coverage filtering:\n";
 	cout << "  -vcfFilterPolicy POLICY   technical (default), all, or ignore; GT is ignored\n";
 	cout << "                            technical rejects named failures except clearly\n";
@@ -245,7 +259,8 @@ void helpMsg() {
 	cout << "                            missing QUAL fails whenever this minimum is nonzero\n";
 	cout << "  -minCallQualAdaptive NUM  mean-depth QUAL scaling; 0 disables (default: 0)\n";
 	cout << "  -depthFilterScale NUM     minimum/mean contig depth scale (default: 0.25)\n";
-	cout << "  -maxDepthFilterScale NUM  maximum/mean contig depth scale; 0 disables (default: 3)\n";
+	cout << "  -maxDepthFilterScale NUM  maximum/mean contig depth scale; 0 disables (default: 0)\n";
+	cout << "                            opt in cautiously: metagenomic abundance is highly uneven\n";
 	cout << "  -indelRange INT           filter SNPs near an indel (default: 5)\n";
 	cout << "  -maxRefMismatches INT     abort after this many REF/FASTA mismatches (default: 10)\n";
 	cout << "  -minMQ0F NUM              maximum zero-mapping-quality fraction (default: 0.1)\n";
@@ -288,7 +303,7 @@ minDepthPar(), minAltReads(4), minAltFreq(0.05f), minCallQual(20),
 minMQ0F(0.1f), minBQBZ(-3.1f), minSP(40.f),
 addHDTags(true), skipEmptyContigs(true), skipEmptyGenes(true),
 debug1(false), reportINDELs(true), maskMinorAllele(true),
-minCallQualAdaptive(0.f), depthFilterScale(0.25f), maxDepthFilterScale(3.f)
+minCallQualAdaptive(0.f), depthFilterScale(0.25f), maxDepthFilterScale(0.f)
 {
 	bool hasErr = false;
 	if (argc <= 1 || argv == nullptr) {

@@ -1,0 +1,16 @@
+# Example commands; see README.md or `vcf2fna -h` for current defaults.
+# `-seqPlatform` is an informational label and does not change thresholds.
+# A `-minCallDepth` of 0 explicitly disables depth masking for that source.
+
+# Single-VCF example
+-seqPlatform ill -minCallQualAdaptive 0.1 -depthFilterScale 0.01 -minCallDepth 0 -inVCF C:/Users/hildebra/OneDrive/science/data/test/vcf2fasta_muco/test.vcf -depthF C:/Users/hildebra/OneDrive/science/data/test/vcf2fasta_muco/m21BR347s3-smd.bam.coverage -ref C:/Users/hildebra/OneDrive/science/data/test/vcf2fasta_muco/scaffolds.fasta.filt -gff C:/Users/hildebra/OneDrive/science/data/test/vcf2fasta_muco/genes.gff -t 1 -minCallQual 20 -oCtg C:/Users/hildebra/OneDrive/science/data/test/vcf2fasta_muco/cons.new.fna -oGeneNT C:/Users/hildebra/OneDrive/science/data/test/vcf2fasta_muco/cons.new.gene.fna -oGeneAA C:/Users/hildebra/OneDrive/science/data/test/vcf2fasta_muco/cons.new.gene.faa
+
+# Dual-VCF example
+-seqPlatform ill,PB -minCallDepth 2,1 -depthF C:/Users/hildebra/OneDrive/science/data/test/vcf2fasta_muco/m21BR347s3-smd.bam.coverage,C:/Users/hildebra/OneDrive/science/data/test/vcf2fasta_muco/m21BR347s3-smd.bam.coverage -ref C:/Users/hildebra/OneDrive/science/data/test/vcf2fasta_muco/scaffolds.fasta.filt -gff C:/Users/hildebra/OneDrive/science/data/test/vcf2fasta_muco/genes.gff -inVCF C:/Users/hildebra/OneDrive/science/data/test/vcf2fasta_muco/test.vcf,C:/Users/hildebra/OneDrive/science/data/test/vcf2fasta_muco/test.vcf -t 1 -minCallQual 20 -oCtg C:/Users/hildebra/OneDrive/science/data/test/vcf2fasta_muco/cons.new.fna -oGeneNT C:/Users/hildebra/OneDrive/science/data/test/vcf2fasta_muco/cons.new.gene.fna -oGeneAA C:/Users/hildebra/OneDrive/science/data/test/vcf2fasta_muco/cons.new.gene.faa
+
+
+# Gene-only output (fna, faa)
+-seqPlatform ill -minCallDepth 2 -inVCF C:/Users/hildebra/OneDrive/science/data/test/vcf2fasta_muco/test.vcf -depthF C:/Users/hildebra/OneDrive/science/data/test/vcf2fasta_muco/m21BR347s3-smd.bam.coverage -ref C:/Users/hildebra/OneDrive/science/data/test/vcf2fasta_muco/scaffolds.fasta.filt -gff C:/Users/hildebra/OneDrive/science/data/test/vcf2fasta_muco/genes.gff -t 1 -minCallQual 20 -oGeneNT C:/Users/hildebra/OneDrive/science/data/test/vcf2fasta_muco/cons.new.gene.fna -oGeneAA C:/Users/hildebra/OneDrive/science/data/test/vcf2fasta_muco/cons.new.gene.faa
+
+# Statistics only
+-seqPlatform ill -minCallDepth 2 -inVCF C:/Users/hildebra/OneDrive/science/data/test/vcf2fasta_muco/test.vcf -depthF C:/Users/hildebra/OneDrive/science/data/test/vcf2fasta_muco/m21BR347s3-smd.bam.coverage -ref C:/Users/hildebra/OneDrive/science/data/test/vcf2fasta_muco/scaffolds.fasta.filt -gff C:/Users/hildebra/OneDrive/science/data/test/vcf2fasta_muco/genes.gff -t 1 -minCallQual 20 

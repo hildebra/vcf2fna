@@ -42,12 +42,22 @@ proximity checks still apply under every policy.
 The default credible-minor-allele thresholds are four supporting reads and 5%
 frequency (`-minAltReads 4 -minAltFreq 0.05`); indels and other complex
 replacements retain a conservative 10% frequency floor because their alignment
-error background is higher. Missing VCF `QUAL` fails whenever `-minCallQual`
-is nonzero. Sites far above their contig's
-mean depth are also filtered by default (`-maxDepthFilterScale 3`); set that
-option to 0 to disable the high-depth check. Reference/VCF allele mismatches are
-reported, and processing aborts after more than ten by default
-(`-maxRefMismatches`).
+error background is higher. A passing ALT supported by more than half of the
+allele-depth evidence replaces the de novo assembly base; the reference allele
+has no special preference in this decision. Missing VCF `QUAL` fails whenever
+`-minCallQual` is nonzero.
+
+High depth relative to a contig mean is not filtered by default
+(`-maxDepthFilterScale 0`), because organism abundance, copy number, and
+assembly collapse make such a cutoff unreliable in metagenomes. Set a positive
+scale explicitly when it is appropriate for a particular dataset. Independent
+quality, read-support, bias, caller `FILTER`, and minimum-depth checks remain
+active. Reference/VCF allele mismatches are reported, and processing aborts
+after more than ten by default (`-maxRefMismatches`).
+
+Repeated warnings are shown five times per warning category. A single
+informational message then reports that further instances of that category are
+being suppressed; counters and fatal safety limits are unaffected.
 
 Sequence-resolved multi-nucleotide/block substitutions use the same
 conservative replacement path as indels and are included in the indel/complex
@@ -69,15 +79,16 @@ another and from every input path.
 
 ## Building
 
-The source requires a C++17 compiler and has no mandatory compression library:
+The source requires a C++17 compiler. On Linux, the bundled gzip stream is
+enabled automatically and links against zlib:
 
 ```text
-g++ -std=c++17 -O2 -I. vcf2fna.cpp options.cpp fasta.cpp vcf.cpp -o vcf2fna
+make
+# or:
+g++ -std=c++17 -O2 -I. vcf2fna.cpp options.cpp fasta.cpp vcf.cpp -lz -o vcf2fna
 ```
 
-This default build reads and writes uncompressed files. Transparent `.gz`
-support is optional because `gzstream` is not vendored in this repository. To
-enable it, provide `gzstream.h` plus its implementation/library and zlib, define
-`VCF2FNA_USE_GZSTREAM`, and add the corresponding include/linker flags. A build
-without that macro fails with an explicit message only when a `.gz` path is
-requested.
+Linux builds transparently read and write `.gz` paths. Install the platform's
+zlib development package if `zlib.h` or `-lz` is unavailable. Define
+`VCF2FNA_DISABLE_GZIP` to build Linux without compression. Other operating
+systems can opt in with `VCF2FNA_USE_GZSTREAM` and their zlib linker flag.
